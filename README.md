@@ -1,6 +1,6 @@
 # motosim
 
-Open-source motorcycle autonomy research. Sim-first. Not self-driving — not yet.
+First Open-source motorcycle autonomy research on the internet. Sim-first. Not self-driving — not yet.
 
 
 
