@@ -75,7 +75,7 @@ Total mass: 194 kg (matches Honda CBR500R wet weight, excludes rider).
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install mujoco numpy
+pip install -r requirements.txt
 ```
 
 ### Interactive view
@@ -125,6 +125,29 @@ Bike spawns at origin at 5 m/s, PD lean controller weaves through 8 cones at
 x=10,17,24,…,59 (y alternates ±2 m). Chase camera follows. Press `[` / `]` to
 switch to fixed cameras (chase | side | overhead), space to pause, R to reset.
 
+### Perception demo (v0.4 cone detection video)
+
+```bash
+python see.py                           # 15s sim, saves perception.mp4 at 640x480 30fps
+python see.py --duration 30             # longer run
+python see.py --resolution 1280 720     # 720p for YouTube
+python see.py --no-overlay              # raw FPV camera, no bounding boxes
+```
+
+Runs the slalom controller, renders the FPV camera (frame-mounted, not
+steering-mounted), applies classical HSV cone detection on each frame, and
+writes an MP4 with bounding boxes overlaid on detected cones.
+
+Expected output: a 15-second clip where you see the bike's POV weaving
+through the slalom, with green bounding boxes drawn around each visible
+orange cone and a "cones detected: N" HUD label in the top-left.
+
+The detector is `perception.py` — a 70-line classical HSV + connected-
+component implementation. Zero ML dependencies. For the simple case of
+orange cones on grey asphalt it works perfectly; for production motorcycle
+autonomy you'd eventually swap it for a trained detector (YOLOv10, DETR,
+or similar). See the module docstring for the upgrade path.
+
 ### Actuator interface (for future contributors)
 
 Four control channels, each a direct torque motor in `cbr500r.xml`:
@@ -141,11 +164,11 @@ reference controller implementation.
 
 ## Roadmap
 
-- **v0.1** (current): primitive MJCF, self-stability validation
-- **v0.2**: add telescopic fork + swingarm suspension, re-validate
-- **v0.3**: throttle + brake + steer actuators (sim-only, no hardware)
-- **v0.4**: perception stack (camera sensor, YOLO-class object detection)
-- **v0.5**: visual mesh overlay from CBR500R scan (cosmetic)
+- ~~**v0.1**: primitive MJCF, self-stability validation~~
+- ~~**v0.2**: add telescopic fork + swingarm suspension, re-validate~~
+- ~~**v0.3**: throttle + brake + steer actuators (sim-only, no hardware)~~
+- ~~**v0.4**: perception stack — FPV camera + HSV cone detection, offline demo video~~
+- **v0.5** (next): perception-in-the-loop — controller reacts to detected cones instead of a hardcoded schedule; visual mesh overlay from CBR500R scan
 - **v1.0**: PPO lean controller trained via brax/MJX, documented sim-to-sim gap
 - **v2.0** (year 2): second vehicle (MT-07 URDF) to prove vehicle-agnostic architecture
 

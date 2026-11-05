@@ -119,6 +119,16 @@
       <camera name="overhead" mode="trackcom" pos="0 0 12"
               xyaxes="1 0 0  0 1 0"/>
 
+      <!-- FPV ("rider's eye") camera, frame-mounted (not steering-mounted).
+           Position: ~headlight level on the chassis front. 10 deg downward
+           tilt so the road and upcoming cones are both in frame.
+           xyaxes convention: x=camera right (world -y), y=camera up
+           (world up tilted forward by 10 deg).
+           This camera IS steer-stable — it does not pan with the handlebars.
+           Mirrors how comma.ai mounts their camera to the car frame. -->
+      <camera name="fpv" mode="fixed" pos="0.45 0 0.3"
+              xyaxes="0 -1 0  0.174 0 0.985"/>
+
       <!-- ============================================================
            CHASSIS COSMETIC PRIMITIVES (v0.2 cosmetic pass)
            All contype=0 conaffinity=0: pure visual, zero physics impact.
