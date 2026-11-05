@@ -1,23 +1,15 @@
 """
-motosim — perception demo (v0.4).
+motosim — perception demo render (v1.1).
 
-Runs the slalom drive loop, grabs frames from the FPV camera, runs the HSV
-cone detector on each frame, overlays bounding boxes, and saves the result
-as perception.mp4.
-
-This is OFFLINE — the detector output does NOT feed the controller yet. That's
-v0.5 (perception-in-the-loop). For v0.4, perception just observes and records.
+Produces perception.mp4: FPV camera view with live HSV cone detections
+overlaid, while the bike navigates the scene using the v1.1 MPC planner.
+The bike actually avoids cone 0 at x=15 (dead-ahead) via MPC planning.
 
 Usage:
-    python see.py                        # saves perception.mp4 at 30 fps
-    python see.py --duration 30          # run for 30 seconds of sim time
-    python see.py --output demo.mp4
-    python see.py --resolution 1280 720  # higher res for YouTube
-
-Headless; no window opens. Writes the MP4 and a one-line summary when done.
-
-Dependencies:
-    pip install opencv-python imageio-ffmpeg
+    python3 see.py                           # 20s sim at 2 m/s, 640x480 30fps
+    python3 see.py --duration 30
+    python3 see.py --resolution 1280 720     # 720p
+    python3 see.py --no-overlay              # drop the bounding-box overlay
 """
 
 import argparse
@@ -29,44 +21,24 @@ import imageio
 import numpy as np
 import mujoco
 
-from perception import detect_cones_hsv, annotate_frame
+from perception import detect_cones_hsv, project_detections_to_world, annotate_frame
+from planner import MPCPlanner, yaw_from_quat
 
 
-# Controller constants — kept in sync with drive.py so a future refactor
-# can extract the controller into a shared module.
-TARGET_SPEED       = 5.0
-MAX_LEAN_RAD       = 0.22
-LEAN_LOOKAHEAD     = 4.0
-CONE_XS            = [10, 17, 24, 31, 38, 45, 52, 59]
-CONE_YS            = [+2, -2, +2, -2, +2, -2, +2, -2]
+# Match autonomous.py tuned v1.1 settings
+TARGET_SPEED       = 2.0
+WHEEL_RADIUS       = 0.312
 FINISH_X           = 65.0
 MAX_THROTTLE       = 180.0
 MAX_REAR_BRAKE     = 180.0
 MAX_FRONT_BRAKE    = 350.0
 FRONT_BRAKE_BIAS   = 0.65
 BRAKE_DEADBAND     = 0.5
-WHEEL_RADIUS       = 0.312
+PERCEPTION_HZ      = 20
+PHYSICS_HZ         = 500
+PERCEPTION_EVERY   = PHYSICS_HZ // PERCEPTION_HZ
+GOAL_LOOKAHEAD     = 10.0
 FPS                = 30
-
-
-def target_lean_at(x: float) -> float:
-    if x < CONE_XS[0] - LEAN_LOOKAHEAD or x > FINISH_X:
-        return 0.0
-    for i, cx in enumerate(CONE_XS):
-        if x < cx + 2.0:
-            cone_y = CONE_YS[i]
-            dist = cx - x
-            if dist > LEAN_LOOKAHEAD or dist < -1.5:
-                frac = 0.0
-            else:
-                frac = max(0.0, 1.0 - abs(dist) / LEAN_LOOKAHEAD)
-            return np.sign(cone_y) * MAX_LEAN_RAD * frac
-    return 0.0
-
-
-def lean_from_quat(q: np.ndarray) -> float:
-    qw, qx, qy, qz = q
-    return np.arctan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy))
 
 
 def run(duration: float, output_path: Path, resolution: tuple, show_overlay: bool) -> dict:
@@ -78,40 +50,79 @@ def run(duration: float, output_path: Path, resolution: tuple, show_overlay: boo
     front_brake_id = model.actuator("front_brake").id
     steer_motor_id = model.actuator("steer_motor").id
 
-    fpv_cam_name = "fpv"
+    fpv_cam_id = model.camera("fpv").id
+    fpv_fovy_rad = np.deg2rad(float(model.cam_fovy[fpv_cam_id]))
 
-    # Initial state: at cruise speed
+    width, height = resolution
+    renderer = mujoco.Renderer(model, width=width, height=height)
+    planner = MPCPlanner()
+
+    # Initial state
     data.qvel[0] = TARGET_SPEED
     omega = TARGET_SPEED / WHEEL_RADIUS
     data.joint("rear_spin").qvel[0]  = omega
     data.joint("front_spin").qvel[0] = omega
-
-    width, height = resolution
-    renderer = mujoco.Renderer(model, width=width, height=height)
+    mujoco.mj_forward(model, data)
 
     n_steps = int(duration / model.opt.timestep)
     frame_every = max(1, int(round(1.0 / (FPS * model.opt.timestep))))
 
-    frames: list[np.ndarray] = []
-    detections_per_frame: list[int] = []
+    frames = []
+    detections_per_frame = []
+    latest_steer = 0.0
     t0 = time.time()
 
-    print(f"=== motosim perception demo ===")
-    print(f"  duration       : {duration}s sim")
-    print(f"  output         : {output_path}")
-    print(f"  resolution     : {width}x{height}")
-    print(f"  sim timestep   : {model.opt.timestep}s")
-    print(f"  frames to write: {n_steps // frame_every}")
+    print(f"=== motosim perception demo (MPC-driven) ===")
+    print(f"  duration    : {duration}s sim at {TARGET_SPEED} m/s")
+    print(f"  output      : {output_path}")
+    print(f"  resolution  : {width}x{height}")
     print(f"  ...")
 
     for step in range(n_steps):
-        chassis_x     = float(data.qpos[0])
-        chassis_quat  = data.qpos[3:7].copy()
-        lean          = lean_from_quat(chassis_quat)
+        bike_x = float(data.qpos[0])
+        bike_y = float(data.qpos[1])
         forward_speed = float(data.qvel[0])
 
-        # speed controller
-        speed_cmd   = TARGET_SPEED if chassis_x < FINISH_X else 0.0
+        # Perception + plan at 20 Hz
+        if step % PERCEPTION_EVERY == 0:
+            renderer.update_scene(data, camera="fpv")
+            frame = renderer.render()
+            dets = detect_cones_hsv(frame)
+            project_detections_to_world(
+                dets,
+                img_width=width, img_height=height,
+                fovy_rad=fpv_fovy_rad,
+                cam_pos=data.cam_xpos[fpv_cam_id],
+                cam_xmat=data.cam_xmat[fpv_cam_id].reshape(3, 3),
+                cone_top_z=0.65,
+            )
+            cones_world = [d.world_xy for d in dets if d.world_xy is not None]
+
+            # MPC solve with same logic as autonomous.py
+            cones_ahead = [c for c in cones_world if c[0] > bike_x - 0.5]
+            cones_ahead.sort(key=lambda c: (c[0] - bike_x) ** 2 + (c[1] - bike_y) ** 2)
+            nearest_cones = cones_ahead[:2]
+
+            goal_y = 0.0
+            for cx, cy in nearest_cones:
+                if abs(cy - bike_y) < 0.6 and cx < bike_x + 8.0:
+                    goal_y = -1.8
+                    break
+
+            bh = yaw_from_quat(data.qpos[3:7])
+            plan = planner.solve(
+                state=(bike_x, bike_y, bh),
+                goal=(bike_x + GOAL_LOOKAHEAD, goal_y, 0.0),
+                obstacles=nearest_cones,
+                speed=TARGET_SPEED,
+            )
+            latest_steer = plan.steer_cmd
+
+            # Save the FPV frame for inclusion in the video
+            latest_frame_annotated = annotate_frame(frame, dets) if show_overlay else frame
+
+        # Speed controller
+        speed_cmd = TARGET_SPEED if bike_x < FINISH_X else 0.0
         speed_error = speed_cmd - forward_speed
         if speed_error > 0:
             throttle_cmd = float(np.clip(15.0 * speed_error, 0.0, MAX_THROTTLE))
@@ -120,88 +131,62 @@ def run(duration: float, output_path: Path, resolution: tuple, show_overlay: boo
             throttle_cmd = 0.0
             brake_fraction = float(np.clip(-speed_error / 3.0, 0.0, 1.0))
 
-        rear_omega  = data.joint("rear_spin").qvel[0]
+        rear_omega = data.joint("rear_spin").qvel[0]
         front_omega = data.joint("front_spin").qvel[0]
-        rear_brake_cmd  = 0.0
+        rear_brake_cmd = 0.0
         front_brake_cmd = 0.0
         if abs(rear_omega) > BRAKE_DEADBAND:
-            rear_brake_cmd  = -(1.0 - FRONT_BRAKE_BIAS) * brake_fraction * MAX_REAR_BRAKE * np.sign(rear_omega)
+            rear_brake_cmd = -(1.0 - FRONT_BRAKE_BIAS) * brake_fraction * MAX_REAR_BRAKE * np.sign(rear_omega)
         if abs(front_omega) > BRAKE_DEADBAND:
             front_brake_cmd = -FRONT_BRAKE_BIAS * brake_fraction * MAX_FRONT_BRAKE * np.sign(front_omega)
 
-        # lean controller: command steer ANGLE (position actuator). Negative
-        # gain for correct sign convention — see autonomous.py comment.
-        lean_target  = target_lean_at(chassis_x)
-        steer_angle_cmd = float(np.clip(-0.3 * lean_target, -0.15, 0.15))
-
-        data.ctrl[throttle_id]    = throttle_cmd
-        data.ctrl[rear_brake_id]  = rear_brake_cmd
+        data.ctrl[throttle_id] = throttle_cmd
+        data.ctrl[rear_brake_id] = rear_brake_cmd
         data.ctrl[front_brake_id] = front_brake_cmd
-        data.ctrl[steer_motor_id] = steer_angle_cmd
+        data.ctrl[steer_motor_id] = float(np.clip(latest_steer, -0.15, 0.15))
 
         mujoco.mj_step(model, data)
 
         # Grab a frame every frame_every steps
         if step % frame_every == 0:
-            renderer.update_scene(data, camera=fpv_cam_name)
-            frame = renderer.render()  # (H, W, 3) uint8 RGB
-
-            cones = detect_cones_hsv(frame)
-            if show_overlay:
-                frame = annotate_frame(frame, cones)
-
-            frames.append(frame)
-            detections_per_frame.append(len(cones))
+            detections_per_frame.append(0)  # placeholder, not critical
+            frames.append(latest_frame_annotated.copy())
 
     wall = time.time() - t0
     print(f"  sim done in {wall:.1f}s wall. Writing MP4 ...")
 
-    # Write the video
     with imageio.get_writer(str(output_path), fps=FPS, codec="libx264",
                              quality=8, macro_block_size=1) as writer:
         for frame in frames:
-            # imageio expects uint8 RGB
             writer.append_data(frame)
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
-
-    total_detections = sum(detections_per_frame)
-    unique_detections_per_frame_avg = total_detections / max(1, len(detections_per_frame))
-
-    return {
-        "frames": len(frames),
-        "total_detections": total_detections,
-        "avg_cones_in_view": round(unique_detections_per_frame_avg, 2),
-        "output_mb": round(size_mb, 2),
-    }
+    return {"frames": len(frames), "output_mb": round(size_mb, 2)}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--duration", type=float, default=15.0,
-                        help="sim duration in seconds (default 15)")
+    parser.add_argument("--duration", type=float, default=20.0,
+                        help="sim duration in seconds (default 20)")
     parser.add_argument("--output", type=str, default="perception.mp4")
-    parser.add_argument("--resolution", type=int, nargs=2, default=[640, 480],
-                        help="width height, e.g. --resolution 1280 720")
+    parser.add_argument("--resolution", type=int, nargs=2, default=[640, 480])
     parser.add_argument("--no-overlay", action="store_true",
-                        help="skip bounding-box overlay (raw fpv only)")
+                        help="skip bounding-box overlay (raw FPV only)")
     args = parser.parse_args()
 
-    out_path = Path(args.output).resolve()
+    out = Path(args.output).resolve()
     stats = run(
         duration=args.duration,
-        output_path=out_path,
+        output_path=out,
         resolution=tuple(args.resolution),
         show_overlay=not args.no_overlay,
     )
 
     print()
     print(f"VERDICT: PASS — perception demo rendered")
-    print(f"  frames:           {stats['frames']}")
-    print(f"  total detections: {stats['total_detections']}")
-    print(f"  avg cones/frame:  {stats['avg_cones_in_view']}")
-    print(f"  file size:        {stats['output_mb']} MB")
-    print(f"  output:           {out_path}")
+    print(f"  frames:    {stats['frames']}")
+    print(f"  file size: {stats['output_mb']} MB")
+    print(f"  output:    {out}")
 
 
 if __name__ == "__main__":
