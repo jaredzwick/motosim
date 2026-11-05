@@ -38,9 +38,10 @@
 
   <compiler angle="radian" coordinate="local" inertiafromgeom="false"/>
 
-  <option timestep="0.002" integrator="RK4" iterations="100" tolerance="1e-10">
-    <flag energy="enable"/>
-  </option>
+  <!-- No <flag energy="enable"/> — MJX (used by train.py / rollout.py) does not
+       implement that flag. If you want energy telemetry in a native-MuJoCo-only
+       script, add the flag at that call site via mj_model.opt.enableflags. -->
+  <option timestep="0.002" integrator="RK4" iterations="100" tolerance="1e-10"/>
 
   <size nconmax="100" njmax="500"/>
 
@@ -416,7 +417,12 @@
     <motor name="throttle"    joint="rear_spin"  gear="1" ctrlrange="0 180"/>
     <motor name="rear_brake"  joint="rear_spin"  gear="1" ctrlrange="-180 0"/>
     <motor name="front_brake" joint="front_spin" gear="1" ctrlrange="-350 0"/>
-    <motor name="steer_motor" joint="steer"      gear="1" ctrlrange="-10 10"/>
+    <!-- Position-controlled steer: ctrl is commanded steer angle (rad), not
+         torque. MuJoCo auto-generates the torque needed via internal kp/kv.
+         kp=500 overcomes the ~4500 N*m/rad self-centering restoring torque
+         the front-end dynamics produce at speed. Previous torque-mode
+         steer_motor could only apply ±10 N*m which couldn't move the fork. -->
+    <position name="steer_motor" joint="steer" kp="500" kv="50" ctrlrange="-0.6 0.6"/>
   </actuator>
 
   <!-- ============================================================

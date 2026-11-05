@@ -49,10 +49,14 @@ EPISODE_SECONDS     = 5.0
 LEAN_CMD_RESAMPLE_S = 1.0
 LEAN_CMD_RANGE      = 0.15      # radians, ~8.6 deg peak
 FALL_Z              = 0.30
-ALIVE_BONUS         = 1.0
-TRACK_WEIGHT        = 10.0
+ALIVE_BONUS         = 0.1      # was 1.0 — reduced so tracking dominates
+TRACK_WEIGHT        = 50.0     # was 10.0 — stronger pull toward target
 ACTION_WEIGHT       = 0.01
 FALL_PENALTY        = 100.0
+# Linear vs squared tracking: squared gives tiny gradient near zero error,
+# which is exactly where the random policy already sits. Linear keeps
+# gradient constant at any error magnitude.
+TRACK_USE_LINEAR    = True
 
 
 def _lean_from_quat(qw, qx, qy, qz):
@@ -180,7 +184,13 @@ class MotorcycleBalance(PipelineEnv):
         lean_err = lean - commanded_lean
 
         reward_alive  = ALIVE_BONUS
-        reward_track  = -TRACK_WEIGHT * lean_err * lean_err
+        # Linear tracking penalty keeps gradient magnitude constant at any
+        # error. Squared penalty has near-zero gradient at small error — exactly
+        # where the random-init policy sits — so PPO can't find the signal.
+        if TRACK_USE_LINEAR:
+            reward_track = -TRACK_WEIGHT * jp.abs(lean_err)
+        else:
+            reward_track = -TRACK_WEIGHT * lean_err * lean_err
         reward_action = -ACTION_WEIGHT * action[0] * action[0]
 
         fallen = chassis_z < FALL_Z
@@ -193,20 +203,27 @@ class MotorcycleBalance(PipelineEnv):
         time_up = step_count >= self._max_steps
         done = jp.where(time_up, 1.0, done)
 
-        new_metrics = {
+        # MERGE our fields into the existing dicts rather than replace them.
+        # Brax's training wrappers inject their own keys (truncation, steps,
+        # first_obs, episode_metrics, episode_done, first_pipeline_state, plus
+        # a top-level "reward" metric). Replacing the dicts drops those keys
+        # and breaks jax.lax.scan's pytree-structure check during unroll.
+        new_metrics = dict(state.metrics)
+        new_metrics.update({
             "reward_alive":   reward_alive,
             "reward_track":   reward_track,
             "reward_action":  reward_action,
             "reward_fall":    reward_fall,
             "lean_error":     jp.abs(lean_err),
             "forward_speed":  forward_speed,
-        }
+        })
 
-        new_info = {
+        new_info = dict(state.info)
+        new_info.update({
             "rng": rng,
             "commanded_lean": commanded_lean,
             "step_count": step_count,
-        }
+        })
 
         return state.replace(
             pipeline_state=pipeline_state, obs=obs,

@@ -10,3 +10,6 @@ brax>=0.10
 jax>=0.4
 jaxlib>=0.4
 flax>=0.8
+
+# v1.1 MPC planner
+casadi>=3.6

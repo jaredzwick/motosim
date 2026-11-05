@@ -118,25 +118,31 @@ def project_detections_to_world(
     fovy_rad: float,
     cam_pos: np.ndarray,
     cam_xmat: np.ndarray,
-    ground_z: float = 0.0,
-    use_bbox_bottom: bool = True,
+    cone_top_z: float = 0.65,
 ) -> None:
     """
-    Project each detection's image-space center/base to world (x, y) on the
-    ground plane. Mutates each Detection.world_xy in place.
+    Project each detection to world (x, y), mutating Detection.world_xy.
 
-    use_bbox_bottom=True projects the bottom-center of the bbox (where the
-    cone touches the ground) — much more accurate than projecting the
-    geometric center, which would land somewhere mid-cone in the air.
+    Projects the bounding-box TOP pixel against a horizontal plane at z=cone_top_z
+    (cone apex height). The default 0.65 m matches the slalom cones in scene.xml
+    (cylinder centered at z=0.35 with half-length 0.30, so top is at z=0.65).
+    Using 0.70 undershoots systematically by ~5m because the camera sits HIGHER
+    than the cone top (world z=0.8), so the ray through the bbox-top pixel goes
+    downward and intersects any too-high plane closer to the camera. This is MUCH
+    more accurate than projecting bbox-bottom against the ground plane, because
+    the HSV detector reliably catches the cone's bright orange top but often
+    misses the small base at long range. A bbox-bottom pixel that corresponds
+    to the cone BODY'S bottom (not the ground) inverse-projects to a nearly
+    horizontal ray that lands dozens of meters past the actual cone — which is
+    exactly what made the bike drive through dead-ahead cones.
     """
     for det in detections:
         x, y, w, h = det.bbox
-        if use_bbox_bottom:
-            pu, pv = x + w / 2.0, y + h
-        else:
-            pu, pv = det.center
+        pu = x + w / 2.0
+        pv = y  # bbox top
         det.world_xy = project_pixel_to_ground(
-            pu, pv, img_width, img_height, fovy_rad, cam_pos, cam_xmat, ground_z,
+            pu, pv, img_width, img_height, fovy_rad, cam_pos, cam_xmat,
+            ground_z=cone_top_z,
         )
 
 

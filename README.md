@@ -17,7 +17,17 @@ overlaid. Green bounding boxes are the raw classical-CV detections; the
 "cones detected: N" HUD updates per frame. Rendered offscreen via
 `see.py` at 640x480 / 30 fps.
 
-**Status:** v1.0 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + steer), a cone-slalom test track, PD and learned (PPO via brax/MJX) lean controllers, FPV camera, HSV cone detector, inverse perspective mapping, and a perception-driven autonomous controller that navigates the slalom using only what the FPV camera sees.
+### Autonomous demo — MPC-planned swerve around a dead-ahead cone
+
+<video src="https://github.com/jaredzwick/motosim/raw/main/docs/autonomous.mp4" controls autoplay muted loop playsinline width="720"></video>
+
+Chase-cam view of the bike using the v1.1 MPC planner (casadi + ipopt,
+kinematic bicycle model, 2s horizon, re-plans at 20 Hz) to navigate the
+slalom with cone 0 placed dead-ahead at x=15. HUD shows the current MPC
+steer command, bike state, and the FPV camera inset (bottom-left) with
+live cone detections. Rendered via `see_autonomous.py` at 1280x720 / 30 fps.
+
+**Status:** v1.1 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + position-controlled steer), cone-slalom test track with a dead-ahead obstacle, perception pipeline (HSV detector + inverse perspective mapping), MPC trajectory planner, and PPO training infrastructure (v1.0 lean controller). Architecture-complete; MPC tuning for lean-dynamics mismatch is ongoing (see v1.2 roadmap).
 
 ## What this is
 
@@ -254,7 +264,8 @@ reference controller implementation.
 - ~~**v0.4**: perception stack — FPV camera + HSV cone detection, offline demo video~~
 - ~~**v0.5**: perception-in-the-loop — inverse perspective mapping, `autonomous.py` driving the slalom on perception alone, `--drop` and `--noise` failure flags~~
 - ~~**v1.0**: PPO lean controller on brax/MJX — `motosim_env.py` (Brax env), `train.py` (PPO), `rollout.py` (play learned policy). Baseline lean-command tracking task.~~
-- **v1.1** (next): domain randomization during training (randomize mass, friction, wind), measure sim-to-sim generalization. Longer episodes (slalom task, not just lean tracking).
+- ~~**v1.1**: MPC trajectory planner (casadi + ipopt) replacing reactive controller. Kinematic bicycle model, 2s horizon, 20 Hz re-planning, soft obstacle costs + steer-rate constraints. Architecture-complete; tuning for the real motorcycle's lean-dynamics response is v1.2.~~
+- **v1.2** (next): extend MPC planner with lean-dynamics state (adds 1 state + 1 equation). Fixes the current oscillation when lean-lag causes real-bike response to diverge from planner prediction. Or: train a learned trajectory tracker (PPO) to convert planner-trajectory to steer commands that properly handle lean dynamics.
 - **v2.0** (year 2): second vehicle (MT-07 URDF) to prove vehicle-agnostic architecture
 
 Public-road actuation: never, under this license.

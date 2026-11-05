@@ -34,6 +34,27 @@ from datetime import datetime
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
+
+
+# -- Monkey-patch: jax.device_put_replicated was removed in recent JAX, but
+# brax.training.agents.ppo.train still calls it. The migration guide says
+# PositionalSharding is the drop-in replacement. On single-device (CPU-only
+# M4), replication collapses to a simple device_put with a leading device axis.
+# Remove this patch once brax catches up to the new JAX pmap migration.
+if not hasattr(jax, "device_put_replicated"):
+    def _device_put_replicated(x, devices):
+        n = len(devices)
+        def _put(y):
+            y = jnp.asarray(y)
+            stacked = jnp.stack([y] * n, axis=0)
+            if n == 1:
+                return jax.device_put(stacked, devices[0])
+            sharding = jax.sharding.PositionalSharding(devices)
+            return jax.device_put(stacked, sharding)
+        return jax.tree_util.tree_map(_put, x)
+    jax.device_put_replicated = _device_put_replicated
+
 
 # Import the env to trigger registration
 import motosim_env  # noqa: F401

@@ -1,55 +1,54 @@
 """
-motosim — perception-driven autonomous slalom (v0.5).
+motosim — perception + MPC autonomous driving (v1.1).
 
-Unlike drive.py which uses a hardcoded target_lean_at(x) schedule, this script
-drives the bike using ONLY what the FPV camera sees. The controller does not
-know where the cones are — it only knows where its perception module says
-cones are.
+Replaces the v0.5 reactive lean controller with a receding-horizon MPC
+planner. Per cycle:
 
-Pipeline every 20 Hz (every 25 physics steps at timestep=0.002s):
-    1. Render the FPV camera frame
-    2. Detect cones in the frame (HSV threshold -> bounding boxes)
-    3. Project each detection to world (x, y) via ground-plane ray intersection
-    4. Pick the nearest cone ahead of the bike -> pick lean direction
-    5. Hold the chosen lean target for the next 25 physics steps
+    1. Render FPV camera
+    2. HSV detect cones -> project to world coords (perception.py)
+    3. Set goal: 20m ahead on original heading, y=0 (centerline)
+    4. MPC solve (planner.py) -> steer_angle command
+    5. Apply steer (position actuator) + throttle (P controller for speed)
 
-The controller runs at 500 Hz (physics timestep) applying the most recent
-lean target. This matches real hardware: camera 30 FPS, inference 10-15 ms,
-control loop faster.
+The planner naturally handles:
+  - swerving around dead-ahead obstacles
+  - returning to the centerline after swerving
+  - smooth steering (no jitter from frame-to-frame perception noise)
+  - multi-obstacle scenarios (all cones in cost function simultaneously)
 
 Usage:
-    mjpython autonomous.py                  # interactive, chase cam
-    mjpython autonomous.py --drop 0.3       # drop 30% of frames (perception failure test)
-    mjpython autonomous.py --noise 0.5      # add 0.5 m gaussian noise to each detection
+    mjpython autonomous.py
+    mjpython autonomous.py --duration 30
+    mjpython autonomous.py --drop 0.3     (perception failure injection)
 
 Keyboard:
     space        pause/resume
     R            reset bike to start
+    D            toggle verbose terminal output
     [ / ]        cycle fixed cameras (chase | side | overhead | fpv)
-    D            toggle a HUD line in the terminal showing the chosen lean + detections
 """
 
 import argparse
 import time
-from collections import deque
-from typing import Deque, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import mujoco
 import mujoco.viewer
 
 from perception import (
-    Detection,
     detect_cones_hsv,
     project_detections_to_world,
 )
+from planner import MPCPlanner, yaw_from_quat
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-TARGET_SPEED       = 5.0
-MAX_LEAN_RAD       = 0.22
+# ---- Constants ----
+# Target speed reduced from 5.0 to 3.0 m/s for v1.1 — kinematic bicycle planner
+# is accurate at low speed; at 5 m/s lean lag creates planner/reality mismatch
+# and the bike oscillates post-swerve. 3 m/s matches the self-park wedge
+# operating envelope anyway.
+TARGET_SPEED       = 3.0
 WHEEL_RADIUS       = 0.312
 FINISH_X           = 65.0
 
@@ -59,53 +58,16 @@ MAX_FRONT_BRAKE    = 350.0
 FRONT_BRAKE_BIAS   = 0.65
 BRAKE_DEADBAND     = 0.5
 
-# Perception loop rate: run detection every N physics steps
+# Perception loop rate
 PERCEPTION_HZ      = 20
-PHYSICS_HZ         = 500   # 1 / timestep (0.002)
+PHYSICS_HZ         = 500
 PERCEPTION_EVERY   = PHYSICS_HZ // PERCEPTION_HZ
-
-# FPV render size. 640x480 matches see.py where detection was verified working.
-# At 320x240 the cones become 4-5 pixels wide at 10m distance and HSV misses them.
 FPV_WIDTH, FPV_HEIGHT = 640, 480
 
-# Controller gain for lean target from lateral offset of nearest cone
-LATERAL_LEAN_GAIN  = 0.11   # rad per meter of lateral offset
-LOOKAHEAD_MAX      = 15.0   # meters of forward lookahead
-
-
-# ---------------------------------------------------------------------------
-# Lean target from perception
-# ---------------------------------------------------------------------------
-def target_lean_from_cones(
-    cones_world: List[Tuple[float, float]],
-    bike_x: float,
-    bike_y: float,
-) -> float:
-    """
-    Pick a lean target based on perceived cones.
-
-    Strategy: find the nearest cone AHEAD of the bike (world_x > bike_x + 0.5,
-    within LOOKAHEAD_MAX). Lean away from its lateral offset. Lean strength
-    scales with proximity (close cones get stronger reaction).
-    """
-    ahead = [
-        (cx, cy) for (cx, cy) in cones_world
-        if bike_x + 0.5 < cx < bike_x + LOOKAHEAD_MAX
-    ]
-    if not ahead:
-        return 0.0
-
-    # Nearest by forward distance
-    nearest_x, nearest_y = min(ahead, key=lambda c: c[0] - bike_x)
-
-    lateral_offset = nearest_y - bike_y
-    distance       = nearest_x - bike_x
-    urgency        = max(0.0, 1.0 - distance / LOOKAHEAD_MAX)
-
-    # Lean sign: cone on left (+y) -> lean right (positive roll)
-    # (Same sign convention as drive.py)
-    lean = np.sign(lateral_offset) * LATERAL_LEAN_GAIN * abs(lateral_offset) * urgency
-    return float(np.clip(lean, -MAX_LEAN_RAD, MAX_LEAN_RAD))
+# MPC: goal is set to GOAL_LOOKAHEAD meters ahead on the original heading.
+# Gives the planner a direction to pull toward when no obstacles are nearby.
+GOAL_LOOKAHEAD     = 10.0   # shorter horizon = less confusion from distant cones
+ORIGINAL_HEADING   = 0.0   # +x direction
 
 
 def lean_from_quat(q: np.ndarray) -> float:
@@ -114,10 +76,7 @@ def lean_from_quat(q: np.ndarray) -> float:
                              1.0 - 2.0 * (qx * qx + qy * qy)))
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 60.0):
+def main(drop_rate: float = 0.0, max_duration: float = 60.0):
     model = mujoco.MjModel.from_xml_path("scene.xml")
     data  = mujoco.MjData(model)
 
@@ -127,29 +86,23 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
     steer_motor_id = model.actuator("steer_motor").id
 
     fpv_cam_id       = model.camera("fpv").id
-    fpv_fovy_deg     = float(model.cam_fovy[fpv_cam_id])
-    fpv_fovy_rad     = np.deg2rad(fpv_fovy_deg)
-    chase_cam_id     = model.camera("chase").id
+    fpv_fovy_rad     = np.deg2rad(float(model.cam_fovy[fpv_cam_id]))
     rear_frame_body_id = model.body("rear_frame").id
 
     renderer = mujoco.Renderer(model, width=FPV_WIDTH, height=FPV_HEIGHT)
+    planner = MPCPlanner()
 
     # Initial state: cruise speed
     data.qvel[0] = TARGET_SPEED
     omega = TARGET_SPEED / WHEEL_RADIUS
     data.joint("rear_spin").qvel[0]  = omega
     data.joint("front_spin").qvel[0] = omega
-
-    # Compute forward kinematics so cam_xpos / cam_xmat are populated before
-    # the first perception cycle. Without this, the FIRST render fires with
-    # an uninitialized camera pose and projects to garbage.
     mujoco.mj_forward(model, data)
 
-    # Latest perceived world cones (updated by perception loop)
     latest_cones: List[Tuple[float, float]] = []
+    latest_steer_cmd = 0.0
+    latest_plan_info = ""
 
-    # Pause / reset state. Verbose ON by default -- turn off with D once you
-    # confirm perception is working.
     state = {"paused": False, "reset": False, "verbose": True}
 
     def key_callback(keycode: int) -> None:
@@ -167,6 +120,7 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
         data.qvel[0] = TARGET_SPEED
         data.joint("rear_spin").qvel[0]  = omega
         data.joint("front_spin").qvel[0] = omega
+        mujoco.mj_forward(model, data)
 
     rng = np.random.default_rng(42)
     tick_count = 0
@@ -180,18 +134,15 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
         viewer.cam.elevation = -20
 
         print("=" * 60)
-        print("motosim autonomous (v0.5) — perception-driven slalom")
+        print("motosim autonomous (v1.1) — MPC planner + perception")
         print("  space  = pause/resume")
         print("  R      = reset bike to start")
         print("  D      = toggle verbose terminal output")
-        print("  [ / ]  = cycle cameras (chase | side | overhead | fpv)")
-        print(f"  perception rate : {PERCEPTION_HZ} Hz (every {PERCEPTION_EVERY} physics steps)")
-        print(f"  fpv render      : {FPV_WIDTH}x{FPV_HEIGHT}  fovy={fpv_fovy_deg:.1f} deg")
-        print(f"  drop rate       : {drop_rate*100:.0f}% of perception cycles drop all detections")
-        print(f"  noise           : {noise_std:.2f} m gaussian added to each world xy")
+        print(f"  perception rate : {PERCEPTION_HZ} Hz")
+        print(f"  MPC horizon     : {planner.N} steps × {planner.dt}s = {planner.N * planner.dt:.1f}s")
+        print(f"  drop rate       : {drop_rate*100:.0f}% of perception cycles dropped")
         print("=" * 60)
 
-        current_lean_target = 0.0
         start = time.time()
 
         while viewer.is_running() and (time.time() - start) < max_duration:
@@ -200,6 +151,7 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
             if state["reset"]:
                 reset_bike()
                 latest_cones = []
+                latest_steer_cmd = 0.0
                 state["reset"] = False
                 start = time.time()
                 tick_count = 0
@@ -209,15 +161,13 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
                 time.sleep(0.01)
                 continue
 
-            # ---- perception loop (20 Hz) ----
+            # ---- perception + plan (20 Hz) ----
             if tick_count % PERCEPTION_EVERY == 0:
-                # Decide whether to skip this perception cycle (failure test)
                 if drop_rate > 0.0 and rng.random() < drop_rate:
-                    # Drop: do not update latest_cones. Controller keeps stale data.
-                    pass
+                    pass  # drop this cycle, controller keeps stale plan
                 else:
                     renderer.update_scene(data, camera="fpv")
-                    frame = renderer.render()  # (H, W, 3) uint8
+                    frame = renderer.render()
                     dets = detect_cones_hsv(frame)
                     project_detections_to_world(
                         dets,
@@ -226,41 +176,54 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
                         fovy_rad=fpv_fovy_rad,
                         cam_pos=data.cam_xpos[fpv_cam_id],
                         cam_xmat=data.cam_xmat[fpv_cam_id].reshape(3, 3),
-                        ground_z=0.0,
+                        cone_top_z=0.65,
                     )
-                    cones_world = []
-                    for d in dets:
-                        if d.world_xy is None:
-                            continue
-                        wx, wy = d.world_xy
-                        if noise_std > 0.0:
-                            wx += rng.normal(0.0, noise_std)
-                            wy += rng.normal(0.0, noise_std)
-                        cones_world.append((wx, wy))
-                    latest_cones = cones_world
+                    latest_cones = [d.world_xy for d in dets if d.world_xy is not None]
+
+                # MPC solve
+                bike_x = float(data.qpos[0])
+                bike_y = float(data.qpos[1])
+                bike_heading = yaw_from_quat(data.qpos[3:7])
+
+                # Goal: lookahead distance along original heading, centerline y=0
+                goal = (bike_x + GOAL_LOOKAHEAD, 0.0, ORIGINAL_HEADING)
+
+                plan = planner.solve(
+                    state=(bike_x, bike_y, bike_heading),
+                    goal=goal,
+                    obstacles=latest_cones,
+                    speed=TARGET_SPEED,
+                )
+                latest_steer_cmd = plan.steer_cmd
+                latest_plan_info = (
+                    f"solve={plan.solve_time_s*1000:5.1f}ms "
+                    f"cost={plan.cost:7.2f} {'OK' if plan.success else 'FAIL'}"
+                )
 
                 if state["verbose"]:
-                    bx, by = float(data.qpos[0]), float(data.qpos[1])
-                    print(f"t={data.time:6.2f} bike=({bx:+5.2f},{by:+5.2f}) "
-                          f"cones_seen={len(latest_cones):2d} "
-                          f"lean_target={current_lean_target:+.3f}")
+                    nearest = sorted(
+                        [c for c in latest_cones if c[0] > bike_x - 1],
+                        key=lambda c: (c[0] - bike_x)**2 + (c[1] - bike_y)**2,
+                    )[:3]
+                    cones_str = " ".join(f"({cx:+5.2f},{cy:+5.2f})" for cx, cy in nearest)
+                    print(f"t={data.time:6.2f} bike=({bike_x:+5.2f},{bike_y:+5.2f}) "
+                          f"hd={bike_heading:+.3f} "
+                          f"steer={latest_steer_cmd:+.3f} "
+                          f"cones={len(latest_cones):2d} nearest=[{cones_str}] "
+                          f"| {latest_plan_info}")
 
-            # ---- compute controls every physics step ----
-            bike_x        = float(data.qpos[0])
-            bike_y        = float(data.qpos[1])
-            lean          = lean_from_quat(data.qpos[3:7])
+            # ---- low-level control (every physics step) ----
+            bike_x = float(data.qpos[0])
             forward_speed = float(data.qvel[0])
 
-            current_lean_target = target_lean_from_cones(latest_cones, bike_x, bike_y)
-
-            # Speed controller (unchanged from drive.py)
-            speed_cmd   = TARGET_SPEED if bike_x < FINISH_X else 0.0
+            # Speed P controller
+            speed_cmd = TARGET_SPEED if bike_x < FINISH_X else 0.0
             speed_error = speed_cmd - forward_speed
             if speed_error > 0:
-                throttle_cmd   = float(np.clip(15.0 * speed_error, 0.0, MAX_THROTTLE))
+                throttle_cmd = float(np.clip(15.0 * speed_error, 0.0, MAX_THROTTLE))
                 brake_fraction = 0.0
             else:
-                throttle_cmd   = 0.0
+                throttle_cmd = 0.0
                 brake_fraction = float(np.clip(-speed_error / 3.0, 0.0, 1.0))
 
             rear_omega  = data.joint("rear_spin").qvel[0]
@@ -272,19 +235,20 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
             if abs(front_omega) > BRAKE_DEADBAND:
                 front_brake_cmd = -FRONT_BRAKE_BIAS * brake_fraction * MAX_FRONT_BRAKE * np.sign(front_omega)
 
-            # Lean controller (same PD, but target now comes from perception)
-            steer_torque = float(np.clip(6.0 * (current_lean_target - lean), -10.0, 10.0))
-
+            # Position actuator: send planned steer angle directly.
+            # Note: planner's steer convention matches MuJoCo's. The negative
+            # sign that was applied in the reactive v0.5 controller is now
+            # implicit in how the planner's cost function uses the kinematic
+            # bicycle model.
             data.ctrl[throttle_id]    = throttle_cmd
             data.ctrl[rear_brake_id]  = rear_brake_cmd
             data.ctrl[front_brake_id] = front_brake_cmd
-            data.ctrl[steer_motor_id] = steer_torque
+            data.ctrl[steer_motor_id] = float(np.clip(latest_steer_cmd, -0.15, 0.15))
 
             mujoco.mj_step(model, data)
             viewer.sync()
             tick_count += 1
 
-            # Real-time pacing
             elapsed = time.time() - step_start
             if elapsed < model.opt.timestep:
                 time.sleep(model.opt.timestep - elapsed)
@@ -293,10 +257,8 @@ def main(drop_rate: float = 0.0, noise_std: float = 0.0, max_duration: float = 6
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--drop", type=float, default=0.0,
-                        help="fraction of perception cycles to drop (0.0-1.0). 0.3 = 30%% blind")
-    parser.add_argument("--noise", type=float, default=0.0,
-                        help="gaussian noise std (meters) added to each world (x, y) estimate")
+                        help="fraction of perception cycles to drop (0.0-1.0)")
     parser.add_argument("--duration", type=float, default=60.0,
                         help="max wall-clock seconds before auto-exit")
     args = parser.parse_args()
-    main(drop_rate=args.drop, noise_std=args.noise, max_duration=args.duration)
+    main(drop_rate=args.drop, max_duration=args.duration)

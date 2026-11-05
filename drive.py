@@ -203,16 +203,20 @@ def main() -> None:
                 front_brake_cmd = -FRONT_BRAKE_BIAS * brake_fraction * MAX_FRONT_BRAKE * np.sign(front_omega)
 
             # ---- lean controller ----
+            # steer_motor is now a POSITION actuator. Command steer ANGLE
+            # (radians), not torque. Negative gain: lean right (+) commands
+            # steer right (-), bike curves right.
             lean_target     = target_lean_at(chassis_x)
-            lean_error      = lean_target - lean
-            KP_LEAN         = 6.0
-            steer_torque    = np.clip(KP_LEAN * lean_error, -10.0, 10.0)
+            STEER_FROM_LEAN_GAIN = -0.3
+            steer_angle_cmd = float(np.clip(
+                STEER_FROM_LEAN_GAIN * lean_target, -0.15, 0.15
+            ))
 
             # ---- apply controls ----
             data.ctrl[throttle_id]    = throttle_cmd
             data.ctrl[rear_brake_id]  = rear_brake_cmd
             data.ctrl[front_brake_id] = front_brake_cmd
-            data.ctrl[steer_motor_id] = steer_torque
+            data.ctrl[steer_motor_id] = steer_angle_cmd
 
             # Only step physics when not paused. Still sync() each frame so
             # the window can redraw if you orbit the camera while paused.

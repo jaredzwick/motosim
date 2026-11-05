@@ -72,6 +72,12 @@
          Position by x,y, each cone has an offset 0.35m above ground.
          ============================================================ -->
 
+    <!-- Cone 0: directly in bike's path at x=15, y=0. Forces the autonomous
+         controller to commit to a max-lean swerve to avoid collision. -->
+    <geom name="cone_0_base" type="cylinder" pos="15  0 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_0_body" type="cylinder" pos="15  0 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_0_stripe" type="cylinder" pos="15  0 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
     <!-- Cone 1: x=10, y=+2 -->
     <geom name="cone_1_base" type="cylinder" pos="10  2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
     <geom name="cone_1_body" type="cylinder" pos="10  2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>

@@ -129,14 +129,15 @@ def run(duration: float, output_path: Path, resolution: tuple, show_overlay: boo
         if abs(front_omega) > BRAKE_DEADBAND:
             front_brake_cmd = -FRONT_BRAKE_BIAS * brake_fraction * MAX_FRONT_BRAKE * np.sign(front_omega)
 
-        # lean controller
+        # lean controller: command steer ANGLE (position actuator). Negative
+        # gain for correct sign convention — see autonomous.py comment.
         lean_target  = target_lean_at(chassis_x)
-        steer_torque = float(np.clip(6.0 * (lean_target - lean), -10.0, 10.0))
+        steer_angle_cmd = float(np.clip(-0.3 * lean_target, -0.15, 0.15))
 
         data.ctrl[throttle_id]    = throttle_cmd
         data.ctrl[rear_brake_id]  = rear_brake_cmd
         data.ctrl[front_brake_id] = front_brake_cmd
-        data.ctrl[steer_motor_id] = steer_torque
+        data.ctrl[steer_motor_id] = steer_angle_cmd
 
         mujoco.mj_step(model, data)
 
