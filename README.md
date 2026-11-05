@@ -4,7 +4,16 @@ Open-source motorcycle autonomy research. Sim-first. Not self-driving — not ye
 
 ![motosim v0.4 — bike at the start of the cone slalom](docs/screenshot-v0.4.png)
 
-**Status:** v0.4 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + steer), a cone-slalom test track, a PD lean+speed controller, an FPV camera, and a classical HSV cone detector that labels cones in a rendered demo video.
+### Perception demo — what the bike sees
+
+<video src="https://github.com/jaredzwick/motosim/raw/main/docs/perception.mp4" controls autoplay muted loop playsinline width="720"></video>
+
+The bike's FPV camera view through the slalom with live HSV cone detection
+overlaid. Green bounding boxes are the raw classical-CV detections; the
+"cones detected: N" HUD updates per frame. Rendered offscreen via
+`see.py` at 640x480 / 30 fps.
+
+**Status:** v0.5 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + steer), a cone-slalom test track, PD lean+speed controller, FPV camera, HSV cone detector, inverse perspective mapping, and a perception-driven autonomous controller that navigates the slalom using only what the FPV camera sees.
 
 ## What this is
 
@@ -127,6 +136,36 @@ Bike spawns at origin at 5 m/s, PD lean controller weaves through 8 cones at
 x=10,17,24,…,59 (y alternates ±2 m). Chase camera follows. Press `[` / `]` to
 switch to fixed cameras (chase | side | overhead), space to pause, R to reset.
 
+### Autonomous slalom (v0.5 perception-driven)
+
+```bash
+mjpython autonomous.py                       # interactive viewer
+mjpython autonomous.py --drop 0.3            # drop 30% of perception cycles (failure test)
+mjpython autonomous.py --noise 0.4           # add 0.4 m gaussian noise per detection
+mjpython autonomous.py --duration 30         # auto-exit after 30s wall-clock
+```
+
+Unlike `drive.py` (which uses a hardcoded cone-position schedule), `autonomous.py`
+runs the FPV camera at 20 Hz, detects cones each frame, projects every detection
+to world coordinates via ground-plane ray intersection, and picks the lean
+target from the nearest cone *ahead of the bike*. The controller does NOT know
+where the cones are placed — it only knows what perception says.
+
+Press **D** in the viewer to toggle a per-perception-cycle terminal readout
+showing bike position, how many cones were seen, and the current lean target.
+
+Failure testing:
+
+- `--drop <frac>` — fraction of perception cycles that drop all detections.
+  Simulates camera dropout or inference failures. Controller falls back to
+  "zero lean" (go straight) when no detections are current.
+- `--noise <std>` — meters of gaussian noise added to each world-xy estimate.
+  Simulates calibration error, pose drift, or motion blur.
+
+Try `--drop 0.5` — the bike mostly makes it through even when half of perception
+frames are blank, because it's always acting on the most recent valid detections.
+At `--drop 0.8` or `--noise 1.5` it starts eating cones.
+
 ### Perception demo (v0.4 cone detection video)
 
 ```bash
@@ -170,11 +209,8 @@ reference controller implementation.
 - ~~**v0.2**: add telescopic fork + swingarm suspension, re-validate~~
 - ~~**v0.3**: throttle + brake + steer actuators (sim-only, no hardware)~~
 - ~~**v0.4**: perception stack — FPV camera + HSV cone detection, offline demo video~~
-- **v0.5** (next): perception-in-the-loop. Three concrete pieces:
-  1. **Inverse perspective mapping** — project detected 2D bounding boxes into 3D world coordinates using the camera intrinsics + known ground plane. Each detected cone becomes a `(world_x, world_y)` estimate.
-  2. **Replace the hardcoded schedule** — kill `target_lean_at(x)` in `drive.py`. New function `target_lean_from_cones(detected_cones_world)` reads perception output and picks lean direction based on what the bike *sees*, not what the script *knows*. This is the step that turns the project from "scripted animation" into actual sim-based autonomy.
-  3. **Failure testing** — add scene variants where cones are occluded (behind each other at glancing angles), partially truncated at frame edges, or shadowed. Does perception degrade gracefully? Does the controller crash the bike if a cone disappears for 3 frames?
-  4. **Cosmetic upgrade** (if scan quality is good): swap primitive geoms for scanned CBR500R mesh as the visual geom. Physics stays on primitives.
+- ~~**v0.5**: perception-in-the-loop — inverse perspective mapping, `autonomous.py` driving the slalom on perception alone, `--drop` and `--noise` failure flags~~
+- **v0.5.1** (next, small): scene-variant failure testing. New `scene_occluded.xml` where cones hide behind each other; `scene_shadows.xml` with harsh directional lighting; validate `autonomous.py` stays alive. Visual mesh overlay from CBR500R scan (cosmetic, depends on Sunday scan).
 - **v1.0**: PPO lean controller trained via brax/MJX, documented sim-to-sim gap
 - **v2.0** (year 2): second vehicle (MT-07 URDF) to prove vehicle-agnostic architecture
 

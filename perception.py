@@ -29,7 +29,7 @@ Dependencies:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -41,6 +41,103 @@ class Detection:
     center: Tuple[int, int]              # (cx, cy)
     area: int                            # pixel area
     aspect_ratio: float                  # h / w — cones should be > 1
+    # Filled by project_to_world(); None until then.
+    world_xy: Optional[Tuple[float, float]] = None
+
+
+def project_pixel_to_ground(
+    pixel_u: float,
+    pixel_v: float,
+    img_width: int,
+    img_height: int,
+    fovy_rad: float,
+    cam_pos: np.ndarray,      # (3,) world xyz of camera
+    cam_xmat: np.ndarray,     # (3, 3) world rotation of camera (MuJoCo convention)
+    ground_z: float = 0.0,
+) -> Optional[Tuple[float, float]]:
+    """
+    Project an image pixel to world (x, y) on the ground plane z = ground_z.
+
+    Uses ground-plane ray intersection: trace a ray from the camera center
+    through the pixel into the world, find where it hits z=ground_z. Returns
+    None if the ray points away from the ground (doesn't intersect).
+
+    MuJoCo camera convention:
+        camera -z axis is the look direction (into the scene)
+        camera +y axis is up in image
+        camera +x axis is right in image
+        cam_xmat rows are the world-frame directions of local x, y, z axes.
+
+    Args:
+        pixel_u: pixel column (0 = left edge, img_width = right edge)
+        pixel_v: pixel row    (0 = top edge,  img_height = bottom edge)
+        img_width, img_height: render dimensions in pixels
+        fovy_rad: vertical field of view in radians (= model.cam_fovy[cam_id] * pi/180)
+        cam_pos: world position of camera (data.cam_xpos[cam_id])
+        cam_xmat: 3x3 rotation (data.cam_xmat[cam_id].reshape(3, 3))
+
+    Returns:
+        (world_x, world_y) or None if no intersection with ground.
+    """
+    # Normalized device coords (NDC): [-1, +1] both axes, image y flipped
+    ndc_x = (pixel_u - img_width  / 2.0) / (img_width  / 2.0)
+    ndc_y = -(pixel_v - img_height / 2.0) / (img_height / 2.0)
+
+    # Ray in camera local frame. Camera looks in -z.
+    tan_half_fovy = np.tan(fovy_rad / 2.0)
+    aspect        = img_width / img_height
+    tan_half_fovx = tan_half_fovy * aspect
+
+    ray_cam = np.array([
+        ndc_x * tan_half_fovx,
+        ndc_y * tan_half_fovy,
+        -1.0,
+    ])
+    ray_cam /= np.linalg.norm(ray_cam)
+
+    # Transform ray to world: world_dir = R @ cam_dir
+    # cam_xmat columns are world-frame basis vectors for local x,y,z.
+    ray_world = cam_xmat @ ray_cam
+
+    # Intersect with z = ground_z plane: cam_pos + t * ray_world such that z = ground_z
+    if abs(ray_world[2]) < 1e-6:
+        return None  # ray parallel to ground
+    t = (ground_z - cam_pos[2]) / ray_world[2]
+    if t <= 0:
+        return None  # intersection is behind camera
+
+    world_x = cam_pos[0] + t * ray_world[0]
+    world_y = cam_pos[1] + t * ray_world[1]
+    return (float(world_x), float(world_y))
+
+
+def project_detections_to_world(
+    detections: List[Detection],
+    img_width: int,
+    img_height: int,
+    fovy_rad: float,
+    cam_pos: np.ndarray,
+    cam_xmat: np.ndarray,
+    ground_z: float = 0.0,
+    use_bbox_bottom: bool = True,
+) -> None:
+    """
+    Project each detection's image-space center/base to world (x, y) on the
+    ground plane. Mutates each Detection.world_xy in place.
+
+    use_bbox_bottom=True projects the bottom-center of the bbox (where the
+    cone touches the ground) — much more accurate than projecting the
+    geometric center, which would land somewhere mid-cone in the air.
+    """
+    for det in detections:
+        x, y, w, h = det.bbox
+        if use_bbox_bottom:
+            pu, pv = x + w / 2.0, y + h
+        else:
+            pu, pv = det.center
+        det.world_xy = project_pixel_to_ground(
+            pu, pv, img_width, img_height, fovy_rad, cam_pos, cam_xmat, ground_z,
+        )
 
 
 def detect_cones_hsv(rgb_frame: np.ndarray,
