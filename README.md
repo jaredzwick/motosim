@@ -2,24 +2,21 @@
 
 Open-source motorcycle autonomy research. Sim-first. Not self-driving — not yet.
 
-![motosim v0.4 — bike at the start of the cone slalom](docs/screenshot-v0.4.png)
+
+
+https://github.com/user-attachments/assets/a2701349-ed5c-468f-b310-4e81c701df44
+
+
 
 ### Perception demo — what the bike sees
 
-
-
-https://github.com/user-attachments/assets/5cf328b5-1c51-480b-9051-7d3a026c4945
-
-
+https://github.com/user-attachments/assets/755f4f2b-046a-4c2a-a316-fdd65f306563
 
 The bike's FPV camera view through the slalom with live HSV cone detection
 overlaid. Green bounding boxes are the raw classical-CV detections; the
 "cones detected: N" HUD updates per frame. Rendered offscreen via
 `see.py` at 640x480 / 30 fps.
 
-### Autonomous demo — MPC-planned swerve around a dead-ahead cone
-
-<video src="https://github.com/jaredzwick/motosim/raw/main/docs/autonomous.mp4" controls autoplay muted loop playsinline width="720"></video>
 
 Chase-cam view of the bike using the v1.1 MPC planner (casadi + ipopt,
 kinematic bicycle model, 2s horizon, re-plans at 20 Hz) to navigate the
