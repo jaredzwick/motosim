@@ -3,3 +3,10 @@ numpy>=1.24
 opencv-python>=4.9
 imageio>=2.34
 imageio-ffmpeg>=0.4.9
+
+# v1.0 training dependencies (optional unless running train.py or rollout.py).
+# These lag Python releases — if install fails on 3.14+, use a Python 3.12 venv.
+brax>=0.10
+jax>=0.4
+jaxlib>=0.4
+flax>=0.8

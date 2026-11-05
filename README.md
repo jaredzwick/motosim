@@ -13,7 +13,7 @@ overlaid. Green bounding boxes are the raw classical-CV detections; the
 "cones detected: N" HUD updates per frame. Rendered offscreen via
 `see.py` at 640x480 / 30 fps.
 
-**Status:** v0.5 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + steer), a cone-slalom test track, PD lean+speed controller, FPV camera, HSV cone detector, inverse perspective mapping, and a perception-driven autonomous controller that navigates the slalom using only what the FPV camera sees.
+**Status:** v1.0 — Whipple-topology CBR500R MJCF with suspension, four-channel actuator stack (throttle + rear_brake + front_brake + steer), a cone-slalom test track, PD and learned (PPO via brax/MJX) lean controllers, FPV camera, HSV cone detector, inverse perspective mapping, and a perception-driven autonomous controller that navigates the slalom using only what the FPV camera sees.
 
 ## What this is
 
@@ -136,6 +136,45 @@ Bike spawns at origin at 5 m/s, PD lean controller weaves through 8 cones at
 x=10,17,24,…,59 (y alternates ±2 m). Chase camera follows. Press `[` / `]` to
 switch to fixed cameras (chase | side | overhead), space to pause, R to reset.
 
+### Learned lean controller (v1.0 PPO training)
+
+```bash
+# Short local run on CPU (~30-60 min on M4):
+python train.py
+
+# Longer / production training (GPU recommended):
+python train.py --num-timesteps 2_000_000 --num-envs 1024
+
+# Play the trained policy in the native MuJoCo viewer:
+mjpython rollout.py                           # loads latest checkpoint
+mjpython rollout.py --command 0.1             # fixed commanded lean 0.1 rad
+mjpython rollout.py --command sine            # oscillating lean command
+```
+
+Trains a tiny MLP (two hidden layers of 64) via PPO on the `MotorcycleBalance`
+MJX environment to track commanded lean angles without falling over. Everything
+other than steer torque (throttle, brakes) uses fixed controllers — only the
+balance skill is learned.
+
+**Observation (6-dim, proprioceptive):** lean, lean_rate, steer_angle,
+steer_rate, forward_speed, commanded_lean. No vision.
+
+**Action (1-dim):** steer torque in [-10, +10] N·m.
+
+**Reward:** alive_bonus − 10 × (lean − commanded)² − 0.01 × action² − 100 × fallen.
+
+**Episode:** 5 seconds (2500 physics steps at timestep 0.004). Commanded lean
+resamples every 1 second to a random value in [-0.15, +0.15] rad.
+
+**Where to train:** CPU works but is slow (~1k env-steps/sec per env on M4).
+Cloud GPU is dramatically faster — Lambda Labs or vast.ai A100 at ~$1–2/hour
+finishes a 2M-step run in 10–15 minutes. The checkpoint pickle transfers back
+to your laptop and loads into `rollout.py`.
+
+**Known deps gotcha:** `brax`, `jax`, `jaxlib`, `flax` tend to lag Python
+releases by 6-12 months. If `pip install brax` fails on 3.14+, use a Python
+3.12 venv for training (native MuJoCo on 3.15 is fine for everything else).
+
 ### Autonomous slalom (v0.5 perception-driven)
 
 ```bash
@@ -210,8 +249,8 @@ reference controller implementation.
 - ~~**v0.3**: throttle + brake + steer actuators (sim-only, no hardware)~~
 - ~~**v0.4**: perception stack — FPV camera + HSV cone detection, offline demo video~~
 - ~~**v0.5**: perception-in-the-loop — inverse perspective mapping, `autonomous.py` driving the slalom on perception alone, `--drop` and `--noise` failure flags~~
-- **v0.5.1** (next, small): scene-variant failure testing. New `scene_occluded.xml` where cones hide behind each other; `scene_shadows.xml` with harsh directional lighting; validate `autonomous.py` stays alive. Visual mesh overlay from CBR500R scan (cosmetic, depends on Sunday scan).
-- **v1.0**: PPO lean controller trained via brax/MJX, documented sim-to-sim gap
+- ~~**v1.0**: PPO lean controller on brax/MJX — `motosim_env.py` (Brax env), `train.py` (PPO), `rollout.py` (play learned policy). Baseline lean-command tracking task.~~
+- **v1.1** (next): domain randomization during training (randomize mass, friction, wind), measure sim-to-sim generalization. Longer episodes (slalom task, not just lean tracking).
 - **v2.0** (year 2): second vehicle (MT-07 URDF) to prove vehicle-agnostic architecture
 
 Public-road actuation: never, under this license.
@@ -226,9 +265,3 @@ MIT. See LICENSE.
 - Cossalter, Vittore. *Motorcycle Dynamics.* 2nd ed. 2006.
 - Honda CBR500R/CBR500R ABS 2013–2015 Service Manual.
 - MuJoCo documentation: https://mujoco.readthedocs.io/
-
-## Why "motosim" and not "motopilot"
-
-Naming constrains ambition. "motopilot" overclaims. "motosim" describes exactly
-what this is, exactly what we can validate, exactly where we are in the arc.
-When it does more than sim, we rename.
