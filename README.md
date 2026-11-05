@@ -92,7 +92,7 @@ gyroscopic stability — this is expected.
 
 ```bash
 python validate.py           # headless
-python validate.py --render  # watch it happen
+mjpython validate.py --render  # watch it happen (needs mjpython on macOS)
 ```
 
 The bike is pushed to 5 m/s with a small 2.9° lean perturbation, then released
@@ -102,6 +102,42 @@ Whipple-topology bikes between their weave and capsize eigenvalue speeds.
 
 If it fails, the inertia tensors in `cbr500r.xml` need tuning. The topology is
 correct by construction.
+
+### Actuator validation (v0.3 acceptance gate)
+
+```bash
+python brake_test.py
+```
+
+Runs four tests headless: full-throttle acceleration 0→10 m/s, then braking
+distances under rear-only, front-only, and combined 60F/40R braking strategies.
+Pass criteria: bike reaches 10 m/s, stops within 15 seconds on each brake test,
+and chassis stays above z=0.3 (doesn't go over the bars). Expected ordering:
+front_only < combined < rear_only stopping distance.
+
+### Drive the slalom (v0.3 cone course)
+
+```bash
+mjpython drive.py
+```
+
+Bike spawns at origin at 5 m/s, PD lean controller weaves through 8 cones at
+x=10,17,24,…,59 (y alternates ±2 m). Chase camera follows. Press `[` / `]` to
+switch to fixed cameras (chase | side | overhead), space to pause, R to reset.
+
+### Actuator interface (for future contributors)
+
+Four control channels, each a direct torque motor in `cbr500r.xml`:
+
+| Actuator | Joint | ctrlrange (N·m) | Semantics |
+|---|---|---|---|
+| `throttle` | `rear_spin` | `0` to `+70` | positive torque only; engines don't push backward |
+| `rear_brake` | `rear_spin` | `-80` to `0` | negative torque; use friction-model gating in controller |
+| `front_brake` | `front_spin` | `-200` to `0` | ~60-70% of total braking authority |
+| `steer_motor` | `steer` | `-10` to `+10` | direct torque, bidirectional |
+
+Set via `data.ctrl[model.actuator("<name>").id] = value`. See `drive.py` for a
+reference controller implementation.
 
 ## Roadmap
 

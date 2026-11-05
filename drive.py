@@ -93,11 +93,23 @@ def main() -> None:
     model = mujoco.MjModel.from_xml_path("scene.xml")
     data = mujoco.MjData(model)
 
-    rear_motor_id  = model.actuator("rear_motor").id
+    throttle_id    = model.actuator("throttle").id
+    rear_brake_id  = model.actuator("rear_brake").id
+    front_brake_id = model.actuator("front_brake").id
     steer_motor_id = model.actuator("steer_motor").id
 
     chase_cam_id = model.camera("chase").id
     rear_frame_body_id = model.body("rear_frame").id
+
+    # Torque caps (match cbr500r.xml ctrlrange values)
+    MAX_THROTTLE    = 180.0
+    MAX_REAR_BRAKE  = 180.0
+    MAX_FRONT_BRAKE = 350.0
+    # Brake distribution: motorcycles use more front than rear.
+    FRONT_BRAKE_BIAS = 0.65
+    # Minimum wheel angular velocity (rad/s) before brakes engage. Below this
+    # the wheel is treated as stationary and brakes apply zero torque.
+    BRAKE_DEADBAND_OMEGA = 0.5
 
     # Start the bike already at cruise speed. Starting from rest is a bad
     # idea for a motorcycle sim: countersteering only works at speed, and
@@ -166,21 +178,40 @@ def main() -> None:
             lean            = lean_from_quat(chassis_quat)
             forward_speed   = float(data.qvel[0])
 
-            # ---- speed controller ----
+            # ---- speed controller: split into throttle + friction-model brakes ----
             speed_cmd       = TARGET_SPEED if chassis_x < FINISH_X else 0.0
             speed_error     = speed_cmd - forward_speed
-            rear_torque     = np.clip(15.0 * speed_error, -70.0, 70.0)
+
+            if speed_error > 0:
+                # Accelerating: throttle only, no brake
+                throttle_cmd = np.clip(15.0 * speed_error, 0.0, MAX_THROTTLE)
+                brake_fraction = 0.0
+            else:
+                # Decelerating: brake only, no throttle
+                throttle_cmd = 0.0
+                brake_fraction = np.clip(-speed_error / 3.0, 0.0, 1.0)
+
+            # Friction-model brakes: only apply torque if the wheel is actually
+            # spinning forward. Direction of brake torque always opposes motion.
+            rear_omega  = data.joint("rear_spin").qvel[0]
+            front_omega = data.joint("front_spin").qvel[0]
+            rear_brake_cmd  = 0.0
+            front_brake_cmd = 0.0
+            if abs(rear_omega) > BRAKE_DEADBAND_OMEGA:
+                rear_brake_cmd  = -(1.0 - FRONT_BRAKE_BIAS) * brake_fraction * MAX_REAR_BRAKE * np.sign(rear_omega)
+            if abs(front_omega) > BRAKE_DEADBAND_OMEGA:
+                front_brake_cmd = -FRONT_BRAKE_BIAS * brake_fraction * MAX_FRONT_BRAKE * np.sign(front_omega)
 
             # ---- lean controller ----
             lean_target     = target_lean_at(chassis_x)
             lean_error      = lean_target - lean
-            # P on lean error. Positive torque steers in one direction; if
-            # the bike leans the wrong way, flip the sign of KP_LEAN.
             KP_LEAN         = 6.0
             steer_torque    = np.clip(KP_LEAN * lean_error, -10.0, 10.0)
 
             # ---- apply controls ----
-            data.ctrl[rear_motor_id]  = rear_torque
+            data.ctrl[throttle_id]    = throttle_cmd
+            data.ctrl[rear_brake_id]  = rear_brake_cmd
+            data.ctrl[front_brake_id] = front_brake_cmd
             data.ctrl[steer_motor_id] = steer_torque
 
             # Only step physics when not paused. Still sync() each frame so

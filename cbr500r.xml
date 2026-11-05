@@ -379,19 +379,34 @@
   </worldbody>
 
   <!-- ============================================================
-       ACTUATORS (v0.3)
-       Two torque motors — rear wheel (propulsion) and steer (lean).
-       Both use direct torque control (gear=1 means ctrl value IS the
-       applied torque in N*m).
+       ACTUATORS (v0.3 — throttle + brake + steer, split cleanly)
 
-       rear_motor: produces ~60 N*m to accelerate the 194 kg bike.
-       steer_motor: small torque is enough — real steering inputs are
-       1-5 N*m. The steer_motor adds alongside the existing passive
-       damping on the steer joint.
+       Four channels, each a direct torque motor (gear=1):
+
+         throttle    : positive-only, rear wheel. Real engines can only
+                       push forward; coasting = zero torque, not negative.
+         rear_brake  : negative-only, rear wheel. ~40% of total braking
+                       on a motorcycle (CBR500R rear disc).
+         front_brake : negative-only, front wheel. ~60-70% of braking
+                       capacity (dual front discs on CBR500R RA variant).
+         steer_motor : bidirectional, steer joint. ±10 N*m matches what
+                       a real rider applies to the bar.
+
+       IMPORTANT: brakes here are naive negative-torque motors. They
+       would drive a stopped wheel BACKWARD if commanded while stationary.
+       The controller (drive.py) implements friction-model gating:
+       only apply brake torque when the wheel is actually spinning.
        ============================================================ -->
   <actuator>
-    <motor name="rear_motor"  joint="rear_spin" gear="1" ctrlrange="-70 70"/>
-    <motor name="steer_motor" joint="steer"     gear="1" ctrlrange="-10 10"/>
+    <!-- Torque values target realistic CBR500R dynamics:
+           throttle 180 Nm  -> ~0.6g peak accel (0-10 m/s in ~3s)
+           rear_brake 180 Nm -> ~0.3g rear-only decel (rear brake is weaker in real life)
+           front_brake 350 Nm -> ~0.6g front-only decel
+           combined max 530 Nm nominal -> capped by tire friction in practice -->
+    <motor name="throttle"    joint="rear_spin"  gear="1" ctrlrange="0 180"/>
+    <motor name="rear_brake"  joint="rear_spin"  gear="1" ctrlrange="-180 0"/>
+    <motor name="front_brake" joint="front_spin" gear="1" ctrlrange="-350 0"/>
+    <motor name="steer_motor" joint="steer"      gear="1" ctrlrange="-10 10"/>
   </actuator>
 
   <!-- ============================================================
