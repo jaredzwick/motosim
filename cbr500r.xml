@@ -1,0 +1,239 @@
+<!--
+  Honda CBR500R (2015) — MJCF v0.1
+  motosim project — open-source motorcycle autonomy research
+
+  Topology: Whipple bicycle (Meijaard, Papadopoulos, Ruina, Schwab, 2007)
+    - rear_frame : chassis + engine + fuel tank (root body, freejoint to world)
+    - rear_wheel : child of rear_frame, hinge about y-axis
+    - front_frame : child of rear_frame, hinge about tilted steer axis (rake)
+    - front_wheel : child of front_frame, hinge about y-axis (after rake tilt)
+
+  Scope of v0.1:
+    - Rigid fork and swingarm (NO suspension)
+    - NO rider mass (autonomous use case, 194 kg wet weight only)
+    - NO actuators (passive validation only)
+    - Cylinder wheels with elliptic friction (NO Pacejka tire model)
+    - Manually-specified inertia tensors (NOT auto-computed from mesh)
+
+  Validation gate for v0.1:
+    Set qvel[rear_spin] = 16 rad/s (approx 5 m/s forward)
+    Apply small initial lean (0.05 rad)
+    Expected: bike self-stabilizes within 2 seconds, holds speed > 30 seconds
+    If it falls: inertia tensors need tuning (not the topology)
+
+  Reference parameters (2015 Honda CBR500R, verified from Honda spec sheet):
+    wheelbase = 1.410 m
+    rake angle = 25 deg = 0.436 rad
+    trail = 0.102 m
+    wet weight = 194 kg (includes 10 kg fuel, no rider)
+    seat height = 0.785 m
+    front tire: 120/70 ZR17 (outer radius 0.306 m, width 0.12 m)
+    rear tire: 160/60 ZR17 (outer radius 0.312 m, width 0.16 m)
+
+  Body frame convention: x = forward, y = left, z = up.
+  Rear wheel contact at approx world origin at rest.
+-->
+
+<mujoco model="cbr500r_v01">
+
+  <compiler angle="radian" coordinate="local" inertiafromgeom="false"/>
+
+  <option timestep="0.002" integrator="RK4" iterations="100" tolerance="1e-10">
+    <flag energy="enable"/>
+  </option>
+
+  <size nconmax="100" njmax="500"/>
+
+  <visual>
+    <quality shadowsize="4096" offsamples="4"/>
+    <headlight ambient="0.3 0.3 0.3" diffuse="0.6 0.6 0.6" specular="0.1 0.1 0.1"/>
+    <map force="0.1" zfar="30"/>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <default>
+    <!-- condim=4 gives the solver tangential + torsional friction, important for wheels -->
+    <geom contype="1" conaffinity="1" condim="4" friction="1.5 0.05 0.001" solref="0.005 1"/>
+    <joint damping="0.01" armature="0.0" limited="false"/>
+  </default>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4"
+             width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="4 4" reflectance="0.1"/>
+    <material name="chassis_mat" rgba="0.75 0.1 0.1 1.0"/>
+    <material name="fork_mat"    rgba="0.3 0.3 0.3 1.0"/>
+    <material name="wheel_mat"   rgba="0.08 0.08 0.08 1.0"/>
+    <material name="rim_mat"     rgba="0.5 0.5 0.55 1.0"/>
+  </asset>
+
+  <worldbody>
+
+    <light name="sun" pos="0 0 6" dir="0 0 -1" directional="true"
+           diffuse="0.9 0.9 0.9" specular="0.2 0.2 0.2"/>
+    <geom name="ground" type="plane" size="50 50 0.1" material="grid"
+          contype="1" conaffinity="1" condim="4" friction="1.5 0.05 0.001"/>
+
+    <!-- ============================================================
+         REAR FRAME (chassis + engine + fuel tank)
+         Root body. Freejoint attaches it to world.
+         CoM offset backward and down from body origin to match
+         real-bike mass distribution (engine low, rider position empty).
+         ============================================================ -->
+    <body name="rear_frame" pos="0 0 0.5">
+      <freejoint name="root"/>
+
+      <!--
+        Inertial estimate for CBR500R chassis without rider:
+          mass = 150 kg (frame + engine + tank w/ fuel)
+          CoM approx 0.15 m forward of rear axle, 0.25 m above rear axle
+            (engine is low, mass density highest at engine block)
+          Ixx (roll about forward axis): dominated by lateral mass ~ 8 kg*m^2
+          Iyy (pitch about lateral axis): dominated by fore-aft mass ~ 20 kg*m^2
+          Izz (yaw about vertical): roughly similar to Iyy ~ 15 kg*m^2
+      -->
+      <!-- CoM: near wheelbase center, 0.55 m above ground (matches CBR500R real-world CoM) -->
+      <inertial pos="0.0 0 0.05" mass="150" diaginertia="8.0 20.0 15.0"/>
+
+      <!-- Chassis visual: a boxy approximation of the tank + seat + engine
+           Not used for collision (would collide with wheels). -->
+      <geom name="chassis_vis" type="box"
+            pos="-0.15 0 -0.05"
+            size="0.30 0.10 0.15"
+            material="chassis_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Swingarm visual: a cylinder from behind rear axle to engine mount area -->
+      <geom name="swingarm_vis" type="cylinder"
+            fromto="-0.75 0 -0.3  -0.3 0 -0.2"
+            size="0.025"
+            material="fork_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- ============================================================
+           REAR WHEEL
+           Hinge about y-axis (lateral). Spins freely.
+           Axle at (-0.705, 0, -0.5) relative to rear_frame body origin,
+           which puts the axle 0.705 m behind rear_frame origin
+           and 0.0 m above ground at rest (since rear_frame pos.z = 0.5
+           and tire outer radius = 0.312).
+           Actually: wheel axle at z = -0.188 relative to body origin
+           so that center of wheel is at z = 0.312 in world.
+           ============================================================ -->
+      <body name="rear_wheel" pos="-0.705 0 -0.188">
+        <joint name="rear_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+
+        <!--
+          Rear wheel + tire + sprocket + rear brake disc:
+            mass = 20 kg (heavier than front due to final drive components)
+            Iyy (spin axis): m * r^2 approx for tire-dominated mass = 20 * 0.312^2 = 1.95
+                but reduced since not all mass at rim; use 1.2
+            Ixx = Izz (transverse): roughly half of spin inertia for a thin disc, use 0.6
+        -->
+        <inertial pos="0 0 0" mass="20" diaginertia="0.6 1.2 0.6"/>
+
+        <!-- Tire geom: cylinder oriented along y-axis via fromto -->
+        <geom name="rear_tire" type="cylinder"
+              fromto="0 -0.08 0  0 0.08 0"
+              size="0.312"
+              material="wheel_mat"/>
+      </body>
+
+      <!-- ============================================================
+           FRONT FRAME (headstock + fork tubes + handlebars)
+           Positioned at the headstock top.
+           Body origin tilted backward by rake angle (25 deg) about y-axis
+           so that local -z axis points down-and-forward along the fork,
+           and local +z axis is the actual steer axis.
+
+           Quaternion for -25 deg rotation about y:
+             w = cos(-12.5 deg) = 0.9763
+             y = sin(-12.5 deg) = -0.2164
+           quat = (w, x, y, z) = (0.9763, 0, -0.2164, 0)
+           ============================================================ -->
+      <body name="front_frame" pos="0.55 0 0.25"
+            quat="0.9763 0 -0.2164 0">
+
+        <!-- Steer joint: hinge about body-local z axis, which is the real steer axis.
+             Damping kept low so the fork can countersteer freely (real bike damper ~0.05). -->
+        <joint name="steer" type="hinge" axis="0 0 1" damping="0.05"/>
+
+        <!--
+          Front frame (fork tubes + triple clamp + handlebars + headlight):
+            mass = 12 kg
+            Moments of inertia: long thin rod along local z
+              Izz (torsion about steer axis): 0.05 (slim)
+              Ixx = Iyy (bending): 0.3 (fork is 0.6 m long)
+            CoM below triple clamp, along fork, approx -0.3 in local coords.
+        -->
+        <!-- Izz (steer axis) raised from 0.05 to 0.25 — real fork assembly has more rotational mass about the steer axis than a bare rod suggests -->
+        <inertial pos="0 0 -0.3" mass="12" diaginertia="0.3 0.3 0.25"/>
+
+        <!-- Fork tube visual. Length 0.49 m along the tilted fork axis places
+             the front wheel bottom at z~0.01 m (just above ground) when rake=25deg.
+             Real CBR500R fork length is ~0.72 m uncompressed, but we're using a
+             shorter rigid-fork approximation since v0.1 has no suspension. -->
+        <geom name="fork_vis" type="cylinder"
+              fromto="0 0 0  0 0 -0.49"
+              size="0.03"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- ============================================================
+             FRONT WHEEL
+             Positioned at the fork bottom with a small perpendicular offset
+             to produce the correct trail geometry.
+             Offset calc for CBR500R:
+               rake = 25 deg, trail = 0.102 m, R = 0.306 m
+               axle_offset_perp = (R*sin(rake) - trail) / cos(rake)
+                                = (0.306*0.4226 - 0.102) / 0.9063
+                                = 0.0295 m
+             So axle is at local pos (0.0295, 0, -0.6) in front_frame coords.
+
+             Important: the wheel body ITSELF is not rake-tilted.
+             Apply the INVERSE rake rotation to the wheel body so its spin
+             axis is horizontal (y-axis in world when bike is upright).
+             Inverse of -25 deg about y = +25 deg about y.
+             quat = (cos(12.5 deg), 0, sin(12.5 deg), 0)
+                  = (0.9763, 0, 0.2164, 0)
+             ============================================================ -->
+        <body name="front_wheel" pos="0.0295 0 -0.49"
+              quat="0.9763 0 0.2164 0">
+          <joint name="front_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+
+          <!--
+            Front wheel + tire + brake discs (dual-disc for CBR500R):
+              mass = 12 kg
+              Iyy (spin): 12 * 0.306^2 reduced = 0.75
+              Ixx = Izz: 0.4
+          -->
+          <inertial pos="0 0 0" mass="12" diaginertia="0.4 0.75 0.4"/>
+
+          <!-- Front tire -->
+          <geom name="front_tire" type="cylinder"
+                fromto="0 -0.06 0  0 0.06 0"
+                size="0.306"
+                material="wheel_mat"/>
+        </body>
+      </body>
+    </body>
+
+  </worldbody>
+
+  <!-- ============================================================
+       SENSORS
+       Minimum viable observation stack for later RL / control work.
+       Readable via mjData.sensordata after mj_step.
+       ============================================================ -->
+  <sensor>
+    <framequat    name="chassis_quat"   objtype="body" objname="rear_frame"/>
+    <framepos     name="chassis_pos"    objtype="body" objname="rear_frame"/>
+    <framelinvel  name="chassis_linvel" objtype="body" objname="rear_frame"/>
+    <frameangvel  name="chassis_angvel" objtype="body" objname="rear_frame"/>
+    <jointpos     name="steer_angle"    joint="steer"/>
+    <jointvel     name="steer_rate"     joint="steer"/>
+    <jointvel     name="rear_wheel_rate"  joint="rear_spin"/>
+    <jointvel     name="front_wheel_rate" joint="front_spin"/>
+  </sensor>
+
+</mujoco>
