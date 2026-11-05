@@ -61,10 +61,16 @@
     <texture name="grid" type="2d" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4"
              width="300" height="300"/>
     <material name="grid" texture="grid" texrepeat="4 4" reflectance="0.1"/>
-    <material name="chassis_mat" rgba="0.75 0.1 0.1 1.0"/>
-    <material name="fork_mat"    rgba="0.3 0.3 0.3 1.0"/>
-    <material name="wheel_mat"   rgba="0.08 0.08 0.08 1.0"/>
-    <material name="rim_mat"     rgba="0.5 0.5 0.55 1.0"/>
+    <material name="chassis_mat"   rgba="0.75 0.1 0.1 1.0"/>
+    <material name="fork_mat"      rgba="0.3 0.3 0.3 1.0"/>
+    <material name="wheel_mat"     rgba="0.08 0.08 0.08 1.0"/>
+    <material name="rim_mat"       rgba="0.5 0.5 0.55 1.0"/>
+    <material name="seat_mat"      rgba="0.08 0.08 0.1 1.0"/>
+    <material name="headlight_mat" rgba="1.0 0.95 0.7 1.0" emission="0.5"/>
+    <material name="taillight_mat" rgba="0.9 0.08 0.08 1.0" emission="0.3"/>
+    <material name="exhaust_mat"   rgba="0.75 0.75 0.78 1.0" specular="0.6" shininess="0.8"/>
+    <material name="engine_mat"    rgba="0.25 0.25 0.28 1.0" specular="0.3"/>
+    <material name="tank_mat"      rgba="0.75 0.1 0.1 1.0" specular="0.5" shininess="0.6"/>
   </asset>
 
   <worldbody>
@@ -95,48 +101,138 @@
       <!-- CoM: near wheelbase center, 0.55 m above ground (matches CBR500R real-world CoM) -->
       <inertial pos="0.0 0 0.05" mass="150" diaginertia="8.0 20.0 15.0"/>
 
-      <!-- Chassis visual: a boxy approximation of the tank + seat + engine
-           Not used for collision (would collide with wheels). -->
-      <geom name="chassis_vis" type="box"
-            pos="-0.15 0 -0.05"
-            size="0.30 0.10 0.15"
+      <!-- ============================================================
+           CHASE CAMERA (v0.3)
+           mode="trackcom" — camera position is a constant world-space
+           offset from the parent body's subtree COM, orientation stays
+           world-fixed. Gives a smooth "Steadicam" shot that follows the
+           bike as it moves forward and side-to-side, without jittering
+           on lean.
+
+           To use in viewer: press [ or ] to cycle cameras, then pick
+           "chase". Or the drive.py script sets it as default.
+           ============================================================ -->
+      <camera name="chase" mode="trackcom" pos="-4 0 1.6"
+              xyaxes="0 -1 0  0.25 0 0.97"/>
+      <camera name="side" mode="trackcom" pos="0 -5 1.0"
+              xyaxes="1 0 0  0 0.2 0.98"/>
+      <camera name="overhead" mode="trackcom" pos="0 0 12"
+              xyaxes="1 0 0  0 1 0"/>
+
+      <!-- ============================================================
+           CHASSIS COSMETIC PRIMITIVES (v0.2 cosmetic pass)
+           All contype=0 conaffinity=0: pure visual, zero physics impact.
+           Masses stay in <inertial> above; these geoms have no mass
+           (inertiafromgeom="false" in compiler).
+           ============================================================ -->
+
+      <!-- Engine block: dark boxy mass below the tank, between the wheels -->
+      <geom name="engine_vis" type="box"
+            pos="-0.1 0 -0.1"
+            size="0.18 0.095 0.13"
+            material="engine_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Fuel tank: rounded ellipsoid above the engine, sloping forward -->
+      <geom name="tank_vis" type="ellipsoid"
+            pos="0.08 0 0.08"
+            size="0.22 0.11 0.09"
+            material="tank_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Rider seat: dark flat surface behind the tank -->
+      <geom name="seat_vis" type="box"
+            pos="-0.22 0 0.08"
+            size="0.12 0.095 0.025"
+            material="seat_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Pillion / tail section rising behind the seat -->
+      <geom name="tail_vis" type="box"
+            pos="-0.4 0 0.06"
+            size="0.08 0.07 0.05"
             material="chassis_mat"
             contype="0" conaffinity="0"/>
 
-      <!-- Swingarm visual: a cylinder from behind rear axle to engine mount area -->
-      <geom name="swingarm_vis" type="cylinder"
-            fromto="-0.75 0 -0.3  -0.3 0 -0.2"
+      <!-- Taillight: small red rectangle at the back of the tail -->
+      <geom name="taillight_vis" type="box"
+            pos="-0.48 0 0.06"
+            size="0.015 0.05 0.025"
+            material="taillight_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Exhaust pipe: metallic capsule under the engine, exits on the right
+           (negative Y in bike coords). Starts near the engine, ends near the
+           swingarm pivot. -->
+      <geom name="exhaust_header_vis" type="capsule"
+            fromto="0.0 -0.07 -0.15  -0.25 -0.11 -0.1"
             size="0.025"
+            material="exhaust_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Muffler can: wider cylinder at the end of the header -->
+      <geom name="exhaust_can_vis" type="cylinder"
+            fromto="-0.25 -0.11 -0.1  -0.42 -0.13 -0.05"
+            size="0.045"
+            material="exhaust_mat"
+            contype="0" conaffinity="0"/>
+
+      <!-- Footpegs: two small cylinders on either side at rider-foot level -->
+      <geom name="footpeg_left_vis" type="cylinder"
+            fromto="-0.15 0.14 -0.08  -0.15 0.22 -0.08"
+            size="0.012"
+            material="fork_mat"
+            contype="0" conaffinity="0"/>
+      <geom name="footpeg_right_vis" type="cylinder"
+            fromto="-0.15 -0.14 -0.08  -0.15 -0.22 -0.08"
+            size="0.012"
             material="fork_mat"
             contype="0" conaffinity="0"/>
 
       <!-- ============================================================
-           REAR WHEEL
-           Hinge about y-axis (lateral). Spins freely.
-           Axle at (-0.705, 0, -0.5) relative to rear_frame body origin,
-           which puts the axle 0.705 m behind rear_frame origin
-           and 0.0 m above ground at rest (since rear_frame pos.z = 0.5
-           and tire outer radius = 0.312).
-           Actually: wheel axle at z = -0.188 relative to body origin
-           so that center of wheel is at z = 0.312 in world.
+           SWINGARM (v0.2)
+           Hinges at the engine mount. Modeled with rotational spring +
+           damper at the hinge, approximating the real-world monoshock
+           linkage without modeling the actual shock geometry.
+
+           Pivot placement: local (-0.305, 0, -0.188) in rear_frame coords.
+           With swingarm extending backward 0.4 m and rear wheel at its
+           end, the rear wheel axle sits at local (-0.705, 0, -0.188) at
+           rest, matching v0.1 geometry.
+
+           Stiffness 4000 N*m/rad gives ~5 deg sag under 874 N wheel load.
+           Damping 300 N*m*s/rad is slightly overdamped for this inertia
+           (no oscillation, quick settle).
            ============================================================ -->
-      <body name="rear_wheel" pos="-0.705 0 -0.188">
-        <joint name="rear_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+      <body name="swingarm" pos="-0.305 0 -0.188">
+        <joint name="swingarm_hinge" type="hinge" axis="0 1 0"
+               stiffness="4000" damping="300" springref="0"
+               range="-0.3 0.4" limited="true"/>
 
-        <!--
-          Rear wheel + tire + sprocket + rear brake disc:
-            mass = 20 kg (heavier than front due to final drive components)
-            Iyy (spin axis): m * r^2 approx for tire-dominated mass = 20 * 0.312^2 = 1.95
-                but reduced since not all mass at rim; use 1.2
-            Ixx = Izz (transverse): roughly half of spin inertia for a thin disc, use 0.6
-        -->
-        <inertial pos="0 0 0" mass="20" diaginertia="0.6 1.2 0.6"/>
+        <!-- Swingarm aluminum beam: ~5 kg, dominated by length-axis inertia -->
+        <inertial pos="-0.2 0 0" mass="5" diaginertia="0.05 0.3 0.3"/>
 
-        <!-- Tire geom: cylinder oriented along y-axis via fromto -->
-        <geom name="rear_tire" type="cylinder"
-              fromto="0 -0.08 0  0 0.08 0"
-              size="0.312"
-              material="wheel_mat"/>
+        <geom name="swingarm_vis" type="cylinder"
+              fromto="0 0 0  -0.4 0 0"
+              size="0.025"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- ============================================================
+             REAR WHEEL — now child of swingarm
+             Hinge about y-axis (lateral). Spins freely.
+             At the swingarm end: local (-0.4, 0, 0).
+             ============================================================ -->
+        <body name="rear_wheel" pos="-0.4 0 0">
+          <joint name="rear_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+
+          <inertial pos="0 0 0" mass="20" diaginertia="0.6 1.2 0.6"/>
+
+          <geom name="rear_tire" type="cylinder"
+                fromto="0 -0.08 0  0 0.08 0"
+                size="0.312"
+                material="wheel_mat"/>
+        </body>
       </body>
 
       <!-- ============================================================
@@ -158,67 +254,145 @@
              Damping kept low so the fork can countersteer freely (real bike damper ~0.05). -->
         <joint name="steer" type="hinge" axis="0 0 1" damping="0.05"/>
 
-        <!--
-          Front frame (fork tubes + triple clamp + handlebars + headlight):
-            mass = 12 kg
-            Moments of inertia: long thin rod along local z
-              Izz (torsion about steer axis): 0.05 (slim)
-              Ixx = Iyy (bending): 0.3 (fork is 0.6 m long)
-            CoM below triple clamp, along fork, approx -0.3 in local coords.
-        -->
-        <!-- Izz (steer axis) raised from 0.05 to 0.25 — real fork assembly has more rotational mass about the steer axis than a bare rod suggests -->
-        <inertial pos="0 0 -0.3" mass="12" diaginertia="0.3 0.3 0.25"/>
+        <!-- Front frame = upper fork (triple clamp + stanchions only), 6 kg.
+             Half the previous "front_frame" mass; the other 6 kg moved to fork_lower. -->
+        <inertial pos="0 0 -0.15" mass="6" diaginertia="0.15 0.15 0.15"/>
 
-        <!-- Fork tube visual. Length 0.49 m along the tilted fork axis places
-             the front wheel bottom at z~0.01 m (just above ground) when rake=25deg.
-             Real CBR500R fork length is ~0.72 m uncompressed, but we're using a
-             shorter rigid-fork approximation since v0.1 has no suspension. -->
-        <geom name="fork_vis" type="cylinder"
-              fromto="0 0 0  0 0 -0.49"
-              size="0.03"
+        <!-- Upper fork tubes: pair of stanchions (two cylinders, offset left/right) -->
+        <geom name="fork_left_vis" type="cylinder"
+              fromto="0 0.05 0  0 0.05 -0.3"
+              size="0.022"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+        <geom name="fork_right_vis" type="cylinder"
+              fromto="0 -0.05 0  0 -0.05 -0.3"
+              size="0.022"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Triple clamp: box connecting the two fork tubes at the top -->
+        <geom name="triple_clamp_vis" type="box"
+              pos="0 0 0"
+              size="0.03 0.085 0.015"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Handlebars: horizontal bar across the top of the triple clamp -->
+        <geom name="handlebars_vis" type="capsule"
+              fromto="0 -0.22 0.02  0 0.22 0.02"
+              size="0.013"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Front fairing: angled ellipsoid in front of the triple clamp
+             (in front_frame local coords, "forward" is +x after the rake tilt). -->
+        <geom name="fairing_vis" type="ellipsoid"
+              pos="0.1 0 -0.12"
+              size="0.09 0.14 0.17"
+              material="chassis_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Headlight: bright yellow sphere on the fairing front -->
+        <geom name="headlight_vis" type="sphere"
+              pos="0.17 0 -0.1"
+              size="0.055"
+              material="headlight_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Windscreen: dark sloped box above the headlight -->
+        <geom name="windscreen_vis" type="box"
+              pos="0.12 0 0.08"
+              size="0.03 0.1 0.06"
+              material="seat_mat"
+              contype="0" conaffinity="0"/>
+
+        <!-- Mirrors: two short arms extending from the handlebar ends -->
+        <geom name="mirror_left_vis" type="box"
+              pos="0.04 0.28 0.05"
+              size="0.03 0.02 0.04"
+              material="fork_mat"
+              contype="0" conaffinity="0"/>
+        <geom name="mirror_right_vis" type="box"
+              pos="0.04 -0.28 0.05"
+              size="0.03 0.02 0.04"
               material="fork_mat"
               contype="0" conaffinity="0"/>
 
         <!-- ============================================================
-             FRONT WHEEL
-             Positioned at the fork bottom with a small perpendicular offset
-             to produce the correct trail geometry.
-             Offset calc for CBR500R:
-               rake = 25 deg, trail = 0.102 m, R = 0.306 m
-               axle_offset_perp = (R*sin(rake) - trail) / cos(rake)
-                                = (0.306*0.4226 - 0.102) / 0.9063
-                                = 0.0295 m
-             So axle is at local pos (0.0295, 0, -0.6) in front_frame coords.
+             FORK_LOWER (v0.2)
+             Slides along the fork axis (local z of front_frame, which is
+             the tilted steer axis in world). Compression is positive qpos.
 
-             Important: the wheel body ITSELF is not rake-tilted.
-             Apply the INVERSE rake rotation to the wheel body so its spin
-             axis is horizontal (y-axis in world when bike is upright).
-             Inverse of -25 deg about y = +25 deg about y.
-             quat = (cos(12.5 deg), 0, sin(12.5 deg), 0)
-                  = (0.9763, 0, 0.2164, 0)
+             Slide stiffness 25000 N/m gives ~29mm sag under 715 N front
+             axle load. Range 0 to 0.12 m matches real CBR500R fork travel.
+             Damping 2000 N*s/m is near-critical for this spring and mass.
              ============================================================ -->
-        <body name="front_wheel" pos="0.0295 0 -0.49"
-              quat="0.9763 0 0.2164 0">
-          <joint name="front_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+        <body name="fork_lower" pos="0 0 -0.3">
+          <joint name="fork_slide" type="slide" axis="0 0 1"
+                 stiffness="25000" damping="2000" springref="0"
+                 range="-0.01 0.12" limited="true"/>
 
-          <!--
-            Front wheel + tire + brake discs (dual-disc for CBR500R):
-              mass = 12 kg
-              Iyy (spin): 12 * 0.306^2 reduced = 0.75
-              Ixx = Izz: 0.4
-          -->
-          <inertial pos="0 0 0" mass="12" diaginertia="0.4 0.75 0.4"/>
+          <!-- Fork slider mass: ~6 kg (stanchion lowers + brake caliper mounts) -->
+          <inertial pos="0 0 -0.1" mass="6" diaginertia="0.15 0.15 0.1"/>
 
-          <!-- Front tire -->
-          <geom name="front_tire" type="cylinder"
-                fromto="0 -0.06 0  0 0.06 0"
-                size="0.306"
-                material="wheel_mat"/>
+          <!-- Fork slider tubes: pair matching the upper stanchions -->
+          <geom name="fork_lower_left_vis" type="cylinder"
+                fromto="0 0.05 0  0 0.05 -0.19"
+                size="0.028"
+                material="fork_mat"
+                contype="0" conaffinity="0"/>
+          <geom name="fork_lower_right_vis" type="cylinder"
+                fromto="0 -0.05 0  0 -0.05 -0.19"
+                size="0.028"
+                material="fork_mat"
+                contype="0" conaffinity="0"/>
+
+          <!-- Front mudguard: curved cover over the top of the front tire.
+               Approximated as a tilted box sitting just above the wheel. -->
+          <geom name="front_mudguard_vis" type="box"
+                pos="0.03 0 -0.1"
+                size="0.1 0.055 0.015"
+                quat="0.966 0 -0.259 0"
+                material="chassis_mat"
+                contype="0" conaffinity="0"/>
+
+          <!-- ============================================================
+               FRONT WHEEL — now child of fork_lower
+               Positioned at the slider bottom. Still needs the inverse
+               rake rotation to keep the spin axis horizontal.
+               ============================================================ -->
+          <body name="front_wheel" pos="0.0295 0 -0.19"
+                quat="0.9763 0 0.2164 0">
+            <joint name="front_spin" type="hinge" axis="0 1 0" damping="0.05"/>
+
+            <inertial pos="0 0 0" mass="12" diaginertia="0.4 0.75 0.4"/>
+
+            <geom name="front_tire" type="cylinder"
+                  fromto="0 -0.06 0  0 0.06 0"
+                  size="0.306"
+                  material="wheel_mat"/>
+          </body>
         </body>
       </body>
     </body>
 
   </worldbody>
+
+  <!-- ============================================================
+       ACTUATORS (v0.3)
+       Two torque motors — rear wheel (propulsion) and steer (lean).
+       Both use direct torque control (gear=1 means ctrl value IS the
+       applied torque in N*m).
+
+       rear_motor: produces ~60 N*m to accelerate the 194 kg bike.
+       steer_motor: small torque is enough — real steering inputs are
+       1-5 N*m. The steer_motor adds alongside the existing passive
+       damping on the steer joint.
+       ============================================================ -->
+  <actuator>
+    <motor name="rear_motor"  joint="rear_spin" gear="1" ctrlrange="-70 70"/>
+    <motor name="steer_motor" joint="steer"     gear="1" ctrlrange="-10 10"/>
+  </actuator>
 
   <!-- ============================================================
        SENSORS

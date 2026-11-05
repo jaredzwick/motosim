@@ -62,13 +62,13 @@ def run(render: bool = False):
     data.qpos[6] = 0.0
 
     # Forward velocity on chassis
-    data.qvel[0] = FORWARD_SPEED   # vx
+    data.qvel[0] = FORWARD_SPEED   # vx (freejoint is always first in qvel)
 
     # Wheel spin to match rolling without slip: omega = v / r
+    # Use named joint access so this survives adding/removing joints in the MJCF.
     wheel_omega = FORWARD_SPEED / REAR_WHEEL_RADIUS
-    data.qvel[6] = wheel_omega    # rear spin
-    # front wheel index: last qvel element
-    data.qvel[-1] = wheel_omega   # front spin
+    data.joint("rear_spin").qvel[0] = wheel_omega
+    data.joint("front_spin").qvel[0] = wheel_omega
 
     # Rollout
     n_steps = int(DURATION / model.opt.timestep)

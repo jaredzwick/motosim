@@ -1,0 +1,117 @@
+<!--
+  motosim scene — cone slalom test track
+
+  Includes cbr500r.xml (the bike) and adds:
+    - 8 orange cones in a zig-zag at x = 10, 17, 24, 31, 38, 45, 52, 59
+      with y alternating +2, -2, +2, ...
+    - White start line at x = 0
+    - White finish line at x = 65
+    - Lane tape markers at y = +3 and y = -3 (soft boundary)
+    - Darker sky-like background via <visual><global>
+
+  Run via drive.py (loads scene.xml, launches viewer with PD controller).
+-->
+
+<mujoco model="motosim_scene">
+
+  <include file="cbr500r.xml"/>
+
+  <!-- Darker clearcolor for a late-afternoon overcast vibe
+       (closer to the BMW Ghost Rider test-track aesthetic). -->
+  <visual>
+    <rgba haze="0.65 0.70 0.75 1.0"/>
+    <global azimuth="135" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <material name="cone_mat"       rgba="0.95 0.35 0.08 1.0" emission="0.1"/>
+    <material name="cone_stripe"    rgba="1.0  1.0  1.0  1.0"/>
+    <material name="line_mat"       rgba="1.0  1.0  1.0  1.0" emission="0.05"/>
+    <material name="start_mat"      rgba="0.95 0.95 0.95 1.0"/>
+    <material name="finish_mat"     rgba="0.1  0.1  0.1  1.0"/>
+    <material name="boundary_mat"   rgba="0.9  0.9  0.1  0.8" emission="0.05"/>
+  </asset>
+
+  <worldbody>
+
+    <!-- Start line: wide white band perpendicular to travel at x=0 -->
+    <geom name="start_line" type="box"
+          pos="0 0 0.005"
+          size="0.15 4 0.005"
+          material="start_mat"
+          contype="0" conaffinity="0"/>
+
+    <!-- Finish line: checkered-ish band at x=65 -->
+    <geom name="finish_line_1" type="box" pos="65  1.5 0.005" size="0.3 1.5 0.005" material="finish_mat" contype="0" conaffinity="0"/>
+    <geom name="finish_line_2" type="box" pos="65 -1.5 0.005" size="0.3 1.5 0.005" material="start_mat"  contype="0" conaffinity="0"/>
+
+    <!-- Lane boundary tape: long thin white strips on both sides of the slalom corridor -->
+    <geom name="lane_left"  type="box" pos="32.5  3 0.005" size="32.5 0.08 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="lane_right" type="box" pos="32.5 -3 0.005" size="32.5 0.08 0.005" material="line_mat" contype="0" conaffinity="0"/>
+
+    <!-- Center dashed line, approximated as a series of short boxes along the slalom length -->
+    <geom name="dash_1"  type="box" pos="4   0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_2"  type="box" pos="8   0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_3"  type="box" pos="12  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_4"  type="box" pos="16  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_5"  type="box" pos="20  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_6"  type="box" pos="24  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_7"  type="box" pos="28  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_8"  type="box" pos="32  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_9"  type="box" pos="36  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_10" type="box" pos="40  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_11" type="box" pos="44  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_12" type="box" pos="48  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_13" type="box" pos="52  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_14" type="box" pos="56  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+    <geom name="dash_15" type="box" pos="60  0 0.005" size="0.8 0.05 0.005" material="line_mat" contype="0" conaffinity="0"/>
+
+    <!-- ============================================================
+         CONES (8 orange slalom cones in zig-zag pattern)
+         Approximated as two stacked cylinders: wider base + taller top.
+         Position by x,y, each cone has an offset 0.35m above ground.
+         ============================================================ -->
+
+    <!-- Cone 1: x=10, y=+2 -->
+    <geom name="cone_1_base" type="cylinder" pos="10  2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_1_body" type="cylinder" pos="10  2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_1_stripe" type="cylinder" pos="10  2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 2: x=17, y=-2 -->
+    <geom name="cone_2_base" type="cylinder" pos="17 -2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_2_body" type="cylinder" pos="17 -2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_2_stripe" type="cylinder" pos="17 -2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 3: x=24, y=+2 -->
+    <geom name="cone_3_base" type="cylinder" pos="24  2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_3_body" type="cylinder" pos="24  2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_3_stripe" type="cylinder" pos="24  2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 4: x=31, y=-2 -->
+    <geom name="cone_4_base" type="cylinder" pos="31 -2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_4_body" type="cylinder" pos="31 -2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_4_stripe" type="cylinder" pos="31 -2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 5: x=38, y=+2 -->
+    <geom name="cone_5_base" type="cylinder" pos="38  2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_5_body" type="cylinder" pos="38  2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_5_stripe" type="cylinder" pos="38  2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 6: x=45, y=-2 -->
+    <geom name="cone_6_base" type="cylinder" pos="45 -2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_6_body" type="cylinder" pos="45 -2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_6_stripe" type="cylinder" pos="45 -2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 7: x=52, y=+2 -->
+    <geom name="cone_7_base" type="cylinder" pos="52  2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_7_body" type="cylinder" pos="52  2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_7_stripe" type="cylinder" pos="52  2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+    <!-- Cone 8: x=59, y=-2 -->
+    <geom name="cone_8_base" type="cylinder" pos="59 -2 0.05"  size="0.17 0.05" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_8_body" type="cylinder" pos="59 -2 0.35"  size="0.11 0.30" material="cone_mat"    contype="0" conaffinity="0"/>
+    <geom name="cone_8_stripe" type="cylinder" pos="59 -2 0.45" size="0.115 0.05" material="cone_stripe" contype="0" conaffinity="0"/>
+
+  </worldbody>
+
+</mujoco>
