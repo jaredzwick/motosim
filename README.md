@@ -2,15 +2,12 @@
 
 First Open-source motorcycle autonomy research on the internet. Sim-first. Not self-driving — not yet.
 
+https://github.com/user-attachments/assets/062b5ac2-26c3-44dd-b3e1-15544b20794f
 
+### Perception — what the bike sees
 
-https://github.com/user-attachments/assets/a2701349-ed5c-468f-b310-4e81c701df44
+https://github.com/user-attachments/assets/4f962af2-faeb-4f90-8570-1d91dfed5704
 
-
-
-### Perception demo — what the bike sees
-
-https://github.com/user-attachments/assets/755f4f2b-046a-4c2a-a316-fdd65f306563
 
 The bike's FPV camera view through the slalom with live HSV cone detection
 overlaid. Green bounding boxes are the raw classical-CV detections; the
