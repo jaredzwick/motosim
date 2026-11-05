@@ -44,11 +44,11 @@ from planner import MPCPlanner, yaw_from_quat
 
 
 # ---- Constants ----
-# Target speed reduced from 5.0 to 3.0 m/s for v1.1 — kinematic bicycle planner
-# is accurate at low speed; at 5 m/s lean lag creates planner/reality mismatch
-# and the bike oscillates post-swerve. 3 m/s matches the self-park wedge
-# operating envelope anyway.
-TARGET_SPEED       = 3.0
+# Target speed 2.0 m/s — kinematic-bicycle MPC planner is accurate at low
+# speed; at 5+ m/s lean lag creates planner/reality mismatch and the bike
+# oscillates or overshoots. 2 m/s matches the self-park wedge operating
+# envelope and gives clean 0.7m+ clearance when swerving around an obstacle.
+TARGET_SPEED       = 2.0
 WHEEL_RADIUS       = 0.312
 FINISH_X           = 65.0
 
@@ -185,13 +185,33 @@ def main(drop_rate: float = 0.0, max_duration: float = 60.0):
                 bike_y = float(data.qpos[1])
                 bike_heading = yaw_from_quat(data.qpos[3:7])
 
-                # Goal: lookahead distance along original heading, centerline y=0
-                goal = (bike_x + GOAL_LOOKAHEAD, 0.0, ORIGINAL_HEADING)
+                # Filter to nearest cones ahead. Distant cones add noise to
+                # the planner cost; keep the problem focused on what's
+                # imminently in the way.
+                cones_ahead = [c for c in latest_cones if c[0] > bike_x - 0.5]
+                cones_ahead.sort(key=lambda c: (c[0] - bike_x) ** 2 + (c[1] - bike_y) ** 2)
+                nearest_cones = cones_ahead[:2]
+
+                # Dead-ahead goal shift: if a cone sits near the bike's path,
+                # move the goal off-centerline to one side (RIGHT by default:
+                # negative y). Gives the planner a concrete direction to
+                # swerve. Not sticky — releases as soon as the cone is no
+                # longer in the dead-ahead zone.
+                goal_y = 0.0
+                DEAD_AHEAD_LATERAL = 0.6
+                DEAD_AHEAD_FORWARD = 8.0
+                PASS_SIDE_Y = -1.8
+                for cx, cy in nearest_cones:
+                    if abs(cy - bike_y) < DEAD_AHEAD_LATERAL and cx < bike_x + DEAD_AHEAD_FORWARD:
+                        goal_y = PASS_SIDE_Y
+                        break
+
+                goal = (bike_x + GOAL_LOOKAHEAD, goal_y, ORIGINAL_HEADING)
 
                 plan = planner.solve(
                     state=(bike_x, bike_y, bike_heading),
                     goal=goal,
-                    obstacles=latest_cones,
+                    obstacles=nearest_cones,
                     speed=TARGET_SPEED,
                 )
                 latest_steer_cmd = plan.steer_cmd

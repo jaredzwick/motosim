@@ -42,12 +42,10 @@ import numpy as np
 HORIZON_STEPS   = 20
 DT              = 0.1       # seconds per step (horizon = 2.0 s total)
 WHEELBASE       = 1.41      # CBR500R wheelbase
-MAX_STEER       = 0.08      # rad — intentionally conservative. The kinematic
-                            # bicycle planner underestimates how aggressively
-                            # the real motorcycle responds to steer at speed
-                            # (because it ignores lean dynamics). Capping tight
-                            # keeps the bike controllable at the cost of less
-                            # maneuverability.
+MAX_STEER       = 0.10      # rad — balance between maneuverability and
+                            # stability. At 2 m/s this gives R ~= 14m but
+                            # the slower speed means more arc traversed per
+                            # meter forward, so lateral displacement adds up.
 
 # Cost weights (tuned for CBR500R at 3 m/s with ~2m cone offsets)
 W_GOAL          = 5.0       # terminal goal reach
@@ -55,11 +53,15 @@ W_LANE          = 3.0       # stronger pull to centerline (was 2.0)
 W_HEADING_GOAL  = 3.0       # stronger terminal heading match (was 1.0)
 W_STEER         = 2.0       # higher control cost = less aggressive steering
 W_STEER_RATE    = 25.0      # much smoother steering transitions (was 5.0)
-W_OBSTACLE      = 8.0       # reduced repulsion (was 20.0) — the strong smoothness
-                            # already keeps the bike away without heavy repulsion
+W_OBSTACLE_SOFT = 3.0       # background inverse-distance repulsion (1/d²)
+W_OBSTACLE_HARD = 100.0     # exterior-penalty barrier inside SAFE_RADIUS
+                            # Softened from 500 — too stiff caused solver to
+                            # trade forward progress for distance from cone.
 OBSTACLE_EPS    = 0.5       # (m^2) softening to avoid divide-by-zero
-SAFE_RADIUS     = 1.0       # (m) desired clearance; cost heavy when closer
-STEER_RATE_MAX  = 0.04      # rad per step (0.4 rad/s at 10 Hz) — hard limit
+SAFE_RADIUS     = 1.5       # (m) clearance zone — strong penalty inside
+STEER_RATE_MAX  = 0.025     # rad per step (0.25 rad/s at 10 Hz) — tighter
+                            # to prevent planner from alternating max-left/max-right
+                            # between consecutive re-plans.
 
 MAX_OBSTACLES   = 8         # fixed slot count for the NLP parameters
 
@@ -161,11 +163,16 @@ class MPCPlanner:
             # Steer rate (smoothness between consecutive steps)
             if k > 0:
                 cost += W_STEER_RATE * (U[0, k] - U[0, k - 1]) ** 2
-            # Obstacle repulsion (soft): at every step, for every obstacle slot
+            # Obstacle cost: soft inverse-distance (always on, small) + hard
+            # exterior barrier (only inside SAFE_RADIUS, very strong).
+            # The hard barrier is what actually forces the bike wide of the
+            # cone; the soft term keeps the planner from skimming too close
+            # when it has room to spare.
             for i in range(self.max_obstacles):
                 d2 = (X[0, k] - obstacles[0, i]) ** 2 + (X[1, k] - obstacles[1, i]) ** 2
-                # Clamped inverse: huge cost if d2 < safe_radius^2, falls off smoothly
-                cost += W_OBSTACLE / (d2 + OBSTACLE_EPS)
+                cost += W_OBSTACLE_SOFT / (d2 + OBSTACLE_EPS)
+                penetration = ca.fmax(0, SAFE_RADIUS ** 2 - d2)
+                cost += W_OBSTACLE_HARD * penetration ** 2
 
         # Flatten decision vars
         dec = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))

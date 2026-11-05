@@ -22,7 +22,7 @@ from perception import detect_cones_hsv, project_detections_to_world, annotate_f
 from planner import MPCPlanner, yaw_from_quat
 
 
-TARGET_SPEED = 3.0
+TARGET_SPEED = 2.0
 WHEEL_RADIUS = 0.312
 MAX_THROTTLE = 180.0
 MAX_REAR_BRAKE = 180.0
@@ -101,10 +101,19 @@ def run(duration: float, output_path: Path, resolution: tuple) -> dict:
             # Filter to nearest obstacles ahead
             cones_ahead = [c for c in latest_cones if c[0] > bx - 0.5]
             cones_ahead.sort(key=lambda c: (c[0] - bx) ** 2 + (c[1] - by) ** 2)
+            nearest_cones = cones_ahead[:2]
+
+            # Dead-ahead goal shift (match autonomous.py)
+            goal_y = 0.0
+            for cx, cy in nearest_cones:
+                if abs(cy - by) < 0.6 and cx < bx + 8.0:
+                    goal_y = -1.8
+                    break
+
             plan = planner.solve(
                 state=(bx, by, bh),
-                goal=(bx + GOAL_LOOKAHEAD, 0.0, 0.0),
-                obstacles=cones_ahead[:2],
+                goal=(bx + GOAL_LOOKAHEAD, goal_y, 0.0),
+                obstacles=nearest_cones,
                 speed=TARGET_SPEED,
             )
             latest_steer = plan.steer_cmd

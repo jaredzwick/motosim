@@ -75,6 +75,14 @@ def main():
 
     # Load the model in native MuJoCo for the viewer
     model = mujoco.MjModel.from_xml_path("cbr500r.xml")
+
+    # CRITICAL: match the physics timestep the policy was trained against.
+    # motosim_env.py overrides timestep to 0.004s for MJX throughput, so the
+    # policy learned to emit steer torques at 0.004s cadence. Running at the
+    # native 0.002s cadence effectively doubles the control rate and destabilizes
+    # the bike immediately (it falls at t=0 before the viewer even draws).
+    model.opt.timestep = 0.004
+
     data  = mujoco.MjData(model)
 
     throttle_id    = model.actuator("throttle").id

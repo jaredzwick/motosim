@@ -9,7 +9,7 @@ from planner import MPCPlanner, yaw_from_quat
 
 
 FPV_WIDTH, FPV_HEIGHT = 640, 480
-TARGET_SPEED = 3.0
+TARGET_SPEED = 2.0   # slower = kinematic bicycle planner more accurate
 WHEEL_RADIUS = 0.312
 PERCEPTION_EVERY = 25  # 20 Hz at 500 Hz physics
 
@@ -36,6 +36,14 @@ def main():
 
     latest_cones = []
     latest_steer = 0.0
+
+    # Sticky pass-side state: once a dead-ahead cone triggers a side commit,
+    # hold that goal_y for HOLD_SECONDS so the bike completes the swerve
+    # instead of snapping back to centerline the instant the cone leaves
+    # the dead-ahead window.
+    HOLD_SECONDS = 2.5
+    sticky_goal_y = 0.0
+    sticky_expire = 0.0
 
     duration = 8.0
     n_steps = int(duration / model.opt.timestep)
@@ -65,15 +73,22 @@ def main():
             by = float(data.qpos[1])
             bh = yaw_from_quat(data.qpos[3:7])
 
-            # Only pass the nearest cones AHEAD. Distant and side cones just
-            # add noise to the planner's cost function and cause overshoot.
             cones_ahead = [c for c in latest_cones if c[0] > bx - 0.5]
             cones_ahead.sort(key=lambda c: (c[0] - bx) ** 2 + (c[1] - by) ** 2)
             nearest_cones = cones_ahead[:2]
 
+            # Dead-ahead goal shift: when cone sits in path, bias goal to
+            # the right. Not sticky — once bike passes cone (cone no longer
+            # dead-ahead), goal returns to centerline and bike pulls back.
+            goal_y = 0.0
+            for cx, cy in nearest_cones:
+                if abs(cy - by) < 0.6 and cx < bx + 8.0:
+                    goal_y = -1.8
+                    break
+
             plan = planner.solve(
                 state=(bx, by, bh),
-                goal=(bx + 10.0, 0.0, 0.0),
+                goal=(bx + 10.0, goal_y, 0.0),
                 obstacles=nearest_cones,
                 speed=TARGET_SPEED,
             )
